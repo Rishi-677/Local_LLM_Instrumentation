@@ -1,0 +1,8 @@
+/build/
+/models/
+*.gguf
+*.o
+*.obj
+*.exe
+*.log
+*.ndjson
