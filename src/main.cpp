@@ -47,6 +47,7 @@ struct Options {
     int   delay_ms       = 0;    // optional pacing so the live run is watchable
     float anomaly_thresh = 1e4f;
     bool  no_flash_attn  = true; // default OFF so attention matrices materialize
+    bool  headless       = false;// run to completion without the TUI (verify/CI)
 };
 
 Options parse_args(int argc, char** argv) {
@@ -65,6 +66,7 @@ Options parse_args(int argc, char** argv) {
         else if (a == "--anomaly-threshold") o.anomaly_thresh = (float)std::atof(next("--anomaly-threshold").c_str());
         else if (a == "--flash-attn")        o.no_flash_attn = false;
         else if (a == "--no-flash-attn")     o.no_flash_attn = true;
+        else if (a == "--headless")          o.headless = true;
         else                                 pos.push_back(a);
     }
     if (!pos.empty()) o.model  = pos[0];
@@ -85,10 +87,11 @@ void quiet_log(ggml_log_level level, const char* text, void* /*user*/) {
 // ---------------------------------------------------------------------------
 static void consumer_loop(ts::EventRing& ring,
                           ts::UiState& ui,
-                          ts::App& app,
+                          ts::App* app,
                           ts::Topology& topo,
                           ts::AnomalyDetector& detector,
                           ts::Recorder* recorder,
+                          ts::AttentionSink& attn_sink,
                           std::atomic<int>& target_layer,
                           std::atomic<int>& pending_select,
                           std::atomic<bool>& alive) {
@@ -98,6 +101,7 @@ static void consumer_loop(ts::EventRing& ring,
         if (ps != -2) {
             topo.select(ps);
             target_layer.store(ps, std::memory_order_release);
+            attn_sink.target_layer.store(ps, std::memory_order_release);
         }
 
         bool any = false;
@@ -116,10 +120,14 @@ static void consumer_loop(ts::EventRing& ring,
             if (recorder) recorder->write(ev);
         }
 
+        // Publish the latest captured attention matrix, if any.
+        ts::AttentionPayload ap;
+        if (attn_sink.take(ap)) ui.set_attention(ap);
+
         if (any) {
             ui.set_topology(topo.flatten());
             ui.set_dropped(ring.dropped());
-            app.request_redraw();
+            if (app) app->request_redraw();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(33)); // ~30 fps
     }
@@ -128,11 +136,22 @@ static void consumer_loop(ts::EventRing& ring,
 // ---------------------------------------------------------------------------
 // Live producer: load model, attach the hook, generate tokens.
 // ---------------------------------------------------------------------------
+// Sets a flag true on scope exit so the headless drainer knows the producer
+// has finished and the ring can be drained to empty.
+struct DoneGuard {
+    std::atomic<bool>& done;
+    ~DoneGuard() { done.store(true, std::memory_order_release); }
+};
+
 static void inference_loop(const Options& opt,
                            ts::EventRing& ring,
                            ts::UiState& ui,
-                           std::atomic<bool>& alive) {
+                           ts::AttentionSink* attn_sink,
+                           std::atomic<bool>& alive,
+                           std::atomic<bool>& done) {
+    DoneGuard guard{done};
     ts::Capturer capturer(ring);
+    capturer.set_attention_sink(attn_sink);
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
@@ -208,7 +227,9 @@ static void inference_loop(const Options& opt,
 static void replay_loop(const Options& opt,
                         ts::EventRing& ring,
                         ts::UiState& ui,
-                        std::atomic<bool>& alive) {
+                        std::atomic<bool>& alive,
+                        std::atomic<bool>& done) {
+    DoneGuard guard{done};
     ts::Replay r(opt.replay);
     if (!r.ok()) { ui.set_session_state("REPLAY OPEN FAILED"); return; }
 
@@ -241,7 +262,8 @@ int main(int argc, char** argv) {
             "  --delay-ms <n>           pace tokens/events so the run is watchable\n"
             "  --anomaly-threshold <x>  |value| above x flags an outlier (default 1e4)\n"
             "  --no-flash-attn          disable flash attention (default; exposes attention)\n"
-            "  --flash-attn             allow auto flash attention (hides attention matrix)\n");
+            "  --flash-attn             allow auto flash attention (hides attention matrix)\n"
+            "  --headless               run to completion without the TUI (verify / CI)\n");
         return 1;
     }
 
@@ -265,11 +287,59 @@ int main(int argc, char** argv) {
     ui.set_model_name(replay_mode ? opt.replay : opt.model);
     ui.set_session_state(replay_mode ? "REPLAY" : "LIVE");
 
-    ts::App app(ui);
+    ts::AttentionSink attn_sink;
+    // Default the attention target to layer 0 so the prompt's self-attention
+    // matrix is captured during prefill, before the user selects anything.
+    attn_sink.target_layer.store(0, std::memory_order_release);
 
     std::atomic<bool> alive{true};
-    std::atomic<int>  target_layer{-1};
+    std::atomic<bool> producer_done{false};
+    std::atomic<int>  target_layer{0};
     std::atomic<int>  pending_select{-2};
+
+    auto start_producer = [&]() {
+        if (replay_mode) {
+            return std::thread(replay_loop, std::cref(opt), std::ref(ring), std::ref(ui),
+                               std::ref(alive), std::ref(producer_done));
+        }
+        return std::thread(inference_loop, std::cref(opt), std::ref(ring), std::ref(ui),
+                           &attn_sink, std::ref(alive), std::ref(producer_done));
+    };
+
+    // ---- Headless mode: run to completion, no TUI (verification / CI) -------
+    if (opt.headless) {
+        std::thread producer = start_producer();
+
+        uint64_t total = 0, anomalies = 0;
+        bool got_attention = false;
+        ts::TensorEvent ev;
+        while (!producer_done.load(std::memory_order_acquire) || ring.size_approx() > 0) {
+            while (ring.pop(ev)) {
+                ++total;
+                topo.update(ev);
+                if (auto a = detector.inspect(ev)) ++anomalies;
+                if (recorder) recorder->write(ev);
+            }
+            ts::AttentionPayload ap;
+            if (attn_sink.take(ap)) got_attention = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        producer.join();
+
+        auto layers = topo.flatten();
+        std::printf("Local_LLM_Instrumentation headless run complete.\n");
+        std::printf("  tensor ops captured : %llu\n", (unsigned long long)total);
+        std::printf("  topology rows       : %zu\n", layers.size());
+        std::printf("  anomalies flagged   : %llu\n", (unsigned long long)anomalies);
+        std::printf("  attention captured  : %s\n", got_attention ? "yes" : "no");
+        std::printf("  events dropped      : %zu\n", ring.dropped());
+        if (recorder) { recorder->close(); std::printf("  recorded to         : %s\n", opt.record.c_str()); }
+        llama_backend_free();
+        return 0;
+    }
+
+    // ---- Interactive mode: TUI on the main thread ---------------------------
+    ts::App app(ui);
 
     // Space on a topology row → resolve that row's layer_idx from the snapshot
     // and hand it to the consumer (which owns Topology, single-threaded).
@@ -280,16 +350,12 @@ int main(int argc, char** argv) {
         }
     };
 
-    std::thread consumer(consumer_loop, std::ref(ring), std::ref(ui), std::ref(app),
+    std::thread consumer(consumer_loop, std::ref(ring), std::ref(ui), &app,
                          std::ref(topo), std::ref(detector), recorder.get(),
-                         std::ref(target_layer), std::ref(pending_select), std::ref(alive));
+                         std::ref(attn_sink), std::ref(target_layer),
+                         std::ref(pending_select), std::ref(alive));
 
-    std::thread producer;
-    if (replay_mode) {
-        producer = std::thread(replay_loop, std::cref(opt), std::ref(ring), std::ref(ui), std::ref(alive));
-    } else {
-        producer = std::thread(inference_loop, std::cref(opt), std::ref(ring), std::ref(ui), std::ref(alive));
-    }
+    std::thread producer = start_producer();
 
     int rc = app.run();          // blocks on the FTXUI loop until the user quits
 

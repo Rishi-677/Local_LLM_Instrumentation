@@ -1,5 +1,6 @@
 #include "capturer.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -14,6 +15,42 @@ namespace ts {
 namespace {
 
 constexpr size_t kMaxScan = 65536; // cap element scan in the hot path
+constexpr int64_t kAttnMaxDim = 256; // cap attention matrix rows/cols
+
+// kq_soft_max has shape [n_kv, n_tokens, n_head]: keys fastest, then query
+// tokens, then heads. Extract the [query x key] slice for one head into a
+// row-major AttentionPayload. Called only for the selected layer, so the
+// allocation here is off the per-op hot path for every other node.
+void extract_attention(const ggml_tensor * t, int layer, AttentionSink & sink) {
+    const int64_t n_kv   = t->ne[0];
+    const int64_t n_tok  = t->ne[1];
+    const int64_t n_head = t->ne[2] > 0 ? t->ne[2] : 1;
+
+    int head = sink.target_head.load(std::memory_order_acquire);
+    if (head < 0) head = 0;
+    if (head >= n_head) head = static_cast<int>(n_head - 1);
+
+    const int64_t rows = std::min<int64_t>(n_tok, kAttnMaxDim);
+    const int64_t cols = std::min<int64_t>(n_kv,  kAttnMaxDim);
+    if (rows <= 0 || cols <= 0) return;
+
+    const float * data = static_cast<const float *>(t->data);
+    const int64_t head_off = static_cast<int64_t>(head) * n_kv * n_tok;
+
+    AttentionPayload p;
+    p.layer_idx = layer;
+    p.head      = head;
+    p.rows      = static_cast<int>(rows);
+    p.cols      = static_cast<int>(cols);
+    p.weights.resize(static_cast<size_t>(rows) * static_cast<size_t>(cols));
+
+    for (int64_t r = 0; r < rows; ++r) {
+        for (int64_t c = 0; c < cols; ++c) {
+            p.weights[static_cast<size_t>(r) * cols + c] = data[head_off + r * n_kv + c];
+        }
+    }
+    sink.publish(p);
+}
 
 uint64_t now_ns() {
     return static_cast<uint64_t>(
@@ -121,6 +158,13 @@ bool Capturer::capture(ggml_tensor * t) {
         (t->buffer == nullptr || ggml_backend_buffer_is_host(t->buffer));
     if (t->type == GGML_TYPE_F32 && host_readable && ggml_is_contiguous(t)) {
         fill_stats(t, e);
+    }
+
+    // Out-of-band attention capture: only the selected layer's softmax matrix.
+    if (attn_ && e.layer_idx == attn_->target_layer.load(std::memory_order_acquire) &&
+        t->type == GGML_TYPE_F32 && host_readable && ggml_is_contiguous(t) &&
+        std::strncmp(e.node_name, "kq_soft_max", 11) == 0) {
+        extract_attention(t, e.layer_idx, *attn_);
     }
 
     ring_.push(e); // SPSC; drops + counts on overflow, never blocks

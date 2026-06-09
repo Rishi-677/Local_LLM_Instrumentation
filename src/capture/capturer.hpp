@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 
 #include "../event.hpp"
 #include "../ring_buffer.hpp"
@@ -22,6 +23,35 @@
 struct ggml_tensor; // fwd-decl; ggml.h pulled in by the .cpp
 
 namespace ts {
+
+// Out-of-band channel for the heavy attention payload. The SPSC ring carries
+// only POD TensorEvents; the 2D attention matrix (a slice of the kq_soft_max
+// tensor for the selected layer/head) is published here and picked up by the
+// consumer thread. `target_layer`/`target_head` are set from the UI thread.
+class AttentionSink {
+public:
+    std::atomic<int> target_layer{-1};   // -1 = capture nothing
+    std::atomic<int> target_head{0};
+
+    void publish(const AttentionPayload & p) {
+        std::lock_guard<std::mutex> lk(mu_);
+        latest_ = p;
+        has_    = true;
+    }
+    // Move the latest payload out (consume-once). Returns false if none pending.
+    bool take(AttentionPayload & out) {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!has_) return false;
+        out  = latest_;
+        has_ = false;
+        return true;
+    }
+
+private:
+    std::mutex       mu_;
+    AttentionPayload latest_;
+    bool             has_ = false;
+};
 
 class Capturer {
 public:
@@ -36,11 +66,16 @@ public:
     // first op's latency_us isn't polluted by inter-pass idle time. Optional.
     void prime();
 
+    // Attach an attention sink so the target layer's kq_soft_max matrix is
+    // captured out-of-band. Optional; null disables attention capture.
+    void set_attention_sink(AttentionSink * sink) { attn_ = sink; }
+
 private:
     // Per-instance hot path, invoked from the static trampoline.
     bool capture(ggml_tensor * t);
 
     EventRing &           ring_;
+    AttentionSink *       attn_ = nullptr;
     std::atomic<uint64_t> counter_{ 0 };
     std::atomic<uint64_t> prev_ns_{ 0 }; // steady_clock ns of the previous op
 };
