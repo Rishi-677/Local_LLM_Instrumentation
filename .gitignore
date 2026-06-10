@@ -6,3 +6,4 @@
 *.exe
 *.log
 *.ndjson
+preview.*
