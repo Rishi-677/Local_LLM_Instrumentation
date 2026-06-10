@@ -56,21 +56,30 @@ self-contained.
 # Live: attach to a local GGUF model and watch it think
 ./build/local_llm_instrumentation model.gguf "The quick brown fox"
 
-# Record a session to NDJSON while running
-./build/local_llm_instrumentation model.gguf "Hello" --record session.ndjson
+# Settings from a TOML file (CLI flags override); print the effective config
+./build/local_llm_instrumentation model.gguf --config local_llm_instrumentation.toml
+./build/local_llm_instrumentation --print-config
 
-# Replay a recorded session into the same dashboard (no model needed)
+# Record a session to NDJSON; replay it later (no model needed)
+./build/local_llm_instrumentation model.gguf "Hello" --record session.ndjson
 ./build/local_llm_instrumentation --replay session.ndjson
 
-# Headless: run the full pipeline without the TUI (verification / CI)
-./build/local_llm_instrumentation model.gguf "Hello" --headless --max-tokens 8
+# Headless run + analysis exports (per-layer stats summary)
+./build/local_llm_instrumentation model.gguf "Hello" --headless --export-csv out.csv --export-json out.json
+
+# Measure the capture overhead (hooked vs un-hooked throughput)
+./build/local_llm_instrumentation model.gguf --bench --max-tokens 32
+
+# Render one dashboard frame to stdout (docs / layout check)
+./build/local_llm_instrumentation model.gguf --preview
 ```
 
-Key options: `--max-tokens N`, `--delay-ms N` (pace the run so it's watchable),
-`--anomaly-threshold X`, `--no-flash-attn` (default — required for the attention
-matrix to materialize), `--record <file>`, `--replay <file>`, `--headless`.
+In the TUI: `Tab` cycles panes, `j/k` + `Space` pick a capture target, `h/j/k/l`
++ `+/-` pan/contrast the attention heatmap, `/` filters the packet stream, `q` quits.
 
-Quit the TUI with `q`.
+Key options: `--config <file>`, `--max-tokens N`, `--delay-ms N`, `--ring-capacity N`,
+`--anomaly-threshold X`, `--no-flash-attn` (default — needed for the attention matrix),
+`--record/--replay <file>`, `--headless`, `--bench`, `--export-csv/--export-json <file>`.
 
 ## Notes & limitations
 
@@ -80,4 +89,3 @@ Quit the TUI with `q`.
   steps produce a 1×N_kv attention row.
 - MVP is CPU-first; GPU tensors are detected but their stats are sampled host-side only.
 - Attention is captured live and is **not** part of the recorded event stream (it is out-of-band).
-</content>
