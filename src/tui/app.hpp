@@ -41,6 +41,9 @@ public:
     // (ANSI-colored). Used for headless layout preview / docs — no event loop.
     std::string preview(int width, int height);
 
+    // Apply a live-stream filter (also used by --preview-filter for docs/tests).
+    void set_stream_filter(const std::string& f) { stream_filter_ = f; }
+
     // Invoked with the layer index when the user presses space on a topology
     // row. Set this before run(). May be called from the render thread.
     std::function<void(int /*layer_idx*/)> on_select_target;
@@ -56,6 +59,10 @@ private:
     int   att_pan_row_  = 0;
     int   att_pan_col_  = 0;
     float att_contrast_ = 1.0f;
+
+    // Live packet-stream filter ('/' to edit; matches layer type / op / device).
+    std::string stream_filter_;
+    bool        filter_editing_ = false;
 };
 
 } // namespace ts

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -191,9 +192,17 @@ std::string device_label(Device d) {
     }
 }
 
+std::string to_lower_copy(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
 // ---- Pane 2: LIVE PACKET STREAM ------------------------------------------
-Element render_stream(const UiState::Snapshot& s) {
+Element render_stream(const UiState::Snapshot& s, const std::string& filter,
+                      bool editing) {
     auto sep = [] { return separator() | color(C_BORDER); };
+    const std::string needle = to_lower_copy(filter);
+
     Elements rows;
     rows.push_back(hbox({
         text("ID") | size(WIDTH, EQUAL, 7) | bold | color(C_HEAD),
@@ -206,25 +215,56 @@ Element render_stream(const UiState::Snapshot& s) {
     }));
     rows.push_back(separator() | color(C_BORDER));
 
+    int shown = 0, total = 0;
     // Newest at bottom; frame keeps the latest in view.
     for (const TensorEvent& ev : s.stream) {
+        ++total;
+        const std::string lt = layer_type(ev);
+        if (!needle.empty()) {
+            std::string hay = to_lower_copy(lt + " " + std::string(ev.op_name) +
+                                            " " + device_label(ev.device) + " " +
+                                            std::string(ev.node_name));
+            if (hay.find(needle) == std::string::npos) continue;
+        }
+        ++shown;
         const bool cpu = (ev.device != Device::CUDA && ev.device != Device::Metal);
-        Element devc = text(device_label(ev.device)) |
-                       color(cpu ? C_KEY : C_AQUA);
+        Element devc = text(device_label(ev.device)) | color(cpu ? C_KEY : C_AQUA);
 
         Element row = hbox({
             text(std::to_string(ev.id)) | size(WIDTH, EQUAL, 7) | color(C_ACCENT),
             sep(),
             text(fmt_time(ev.timestamp_ns)) | size(WIDTH, EQUAL, 14) | color(C_ACCENT),
             sep(),
-            text(layer_type(ev)) | size(WIDTH, EQUAL, 16) | color(C_TEXT),
+            text(lt) | size(WIDTH, EQUAL, 16) | color(C_TEXT),
             sep(),
             devc,
         });
         if (ev.has_nan || ev.has_inf) row = row | color(C_RED) | bold;
         rows.push_back(row);
     }
-    return vbox(std::move(rows)) | yframe | flex;
+
+    Element body = vbox(std::move(rows)) | yframe | flex;
+
+    // Filter line: editing prompt, or a persistent active-filter indicator.
+    if (editing) {
+        Element f = hbox({text("/") | color(C_KEY) | bold,
+                          text(filter) | color(C_HEAD),
+                          text("▌") | color(C_KEY),
+                          filler(),
+                          text("[Enter] apply  [Esc] clear ") | color(C_DIM)});
+        return vbox({body, separator() | color(C_BORDER), f});
+    }
+    if (!filter.empty()) {
+        Element f = hbox({text("filter: ") | color(C_DIM),
+                          text(filter) | color(C_KEY) | bold,
+                          text("  (" + std::to_string(shown) + "/" +
+                               std::to_string(total) + ")") | color(C_DIM),
+                          filler(),
+                          text("[/] edit  [Esc] clear ") | color(C_DIM)});
+        return vbox({body, separator() | color(C_BORDER), f});
+    }
+    Element hint = hbox({filler(), text("[/] filter ") | color(C_DIM)});
+    return vbox({body, hint});
 }
 
 // ---- Pane 3: ATTENTION MATRIX VISUALIZER ---------------------------------
@@ -388,7 +428,8 @@ Element render_ledger(const UiState::Snapshot& s) {
 // Compose the full dashboard from a snapshot plus presentation state. Shared by
 // the live render loop and the headless preview path.
 Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
-                    int pan_col, float contrast) {
+                    int pan_col, float contrast, const std::string& filter,
+                    bool filter_editing) {
     Color state_col = (s.session_state == "LIVE") ? C_AQUA : C_ORANGE;
 
     // Model basename only (drop path + extension), capped, to keep the header tight.
@@ -421,7 +462,7 @@ Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
     Element topo = pane(1, "MODEL TOPOLOGY", focus == P_TOPOLOGY,
                         render_topology(s, focus == P_TOPOLOGY));
     Element stream = pane(2, "LIVE PACKET STREAM", focus == P_STREAM,
-                          render_stream(s));
+                          render_stream(s, filter, filter_editing));
     Element attention = pane(3, "ATTENTION MATRIX VISUALIZER", focus == P_ATTENTION,
                              render_attention(s, pan_row, pan_col, contrast));
     Element metrics = pane(4, "RUNTIME METRICS INSPECTOR", focus == P_METRICS,
@@ -454,7 +495,8 @@ void App::request_redraw() {
 
 std::string App::preview(int width, int height) {
     Element doc = build_frame(state_.snapshot(), focus_, att_pan_row_,
-                              att_pan_col_, att_contrast_);
+                              att_pan_col_, att_contrast_, stream_filter_,
+                              filter_editing_);
     auto screen = Screen::Create(Dimension::Fixed(width), Dimension::Fixed(height));
     Render(screen, doc);
     return screen.ToString();
@@ -467,13 +509,30 @@ int App::run() {
     // One Renderer drawing the whole dashboard from a per-frame snapshot.
     auto dashboard = Renderer([this] {
         return build_frame(state_.snapshot(), focus_, att_pan_row_,
-                           att_pan_col_, att_contrast_);
+                           att_pan_col_, att_contrast_, stream_filter_,
+                           filter_editing_);
     });
 
     // Global + routed key handling.
     auto root = CatchEvent(dashboard, [this](Event e) {
         // Cross-thread redraw nudge: consume so it doesn't propagate.
         if (e == Event::Custom) return true;
+
+        // ---- Modal: editing the live-stream filter (swallows all keys) ----
+        if (filter_editing_) {
+            if (e == Event::Return) { filter_editing_ = false; return true; }
+            if (e == Event::Escape) {
+                filter_editing_ = false;
+                stream_filter_.clear();
+                return true;
+            }
+            if (e == Event::Backspace) {
+                if (!stream_filter_.empty()) stream_filter_.pop_back();
+                return true;
+            }
+            if (e.is_character()) { stream_filter_ += e.character(); return true; }
+            return true;
+        }
 
         // ---- Global keys ----
         if (e == Event::q || e == Event::Q) {
@@ -528,6 +587,15 @@ int App::run() {
                 att_pan_row_ = 0;
                 att_pan_col_ = 0;
                 att_contrast_ = 1.0f;
+                return true;
+            }
+        }
+
+        // ---- Live Packet Stream pane keys ----
+        if (focus_ == P_STREAM) {
+            if (e == Event::Character('/')) { filter_editing_ = true; return true; }
+            if (e == Event::Escape && !stream_filter_.empty()) {
+                stream_filter_.clear();
                 return true;
             }
         }

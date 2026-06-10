@@ -52,6 +52,7 @@ struct Options {
     bool  no_flash_attn  = true; // default OFF so attention matrices materialize
     bool  headless       = false;// run to completion without the TUI (verify/CI)
     bool  preview        = false;// render one TUI frame to stdout and exit
+    std::string preview_filter;  // optional stream filter for --preview
     bool  help           = false;
 
     // Sourced from config (TOML) as a baseline, overridable on the CLI.
@@ -109,6 +110,7 @@ void apply_cli(int argc, char** argv, Options& o) {
         else if (a == "--no-flash-attn")     o.no_flash_attn = true;
         else if (a == "--headless")          o.headless = true;
         else if (a == "--preview")           o.preview = true;
+        else if (a == "--preview-filter")    { o.preview = true; o.preview_filter = next("--preview-filter"); }
         else if (a == "-h" || a == "--help") o.help = true;
         else                                 pos.push_back(a);
     }
@@ -439,6 +441,7 @@ int main(int argc, char** argv) {
         ui.set_session_state("LIVE");
 
         ts::App app(ui);
+        if (!opt.preview_filter.empty()) app.set_stream_filter(opt.preview_filter);
         std::string frame = app.preview(150, 46);
         std::fwrite(frame.data(), 1, frame.size(), stdout);
         std::printf("\n");
