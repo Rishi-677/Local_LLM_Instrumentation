@@ -50,14 +50,33 @@ Hook llama.cpp's built-in `ggml_backend_sched_eval_callback` (`cb_eval`) to obse
 
 ## Phase 4 — Polish & robustness
 
-- [ ] **C12 · Performance.** Sampling/backpressure under high event rate; UI ≥30 fps; measure capture overhead vs un-hooked baseline and surface it.
-- [ ] **C13 · Search & feel.** Keyboard search/filter (layer / op / device / severity), focus-cycle polish, NerdFont symbols, dark terminal-safe theme (lazygit/btop inspiration).
+- [x] **C12 · Performance.** `--bench` measures hook overhead (hooked vs un-hooked throughput). Finding: ~50% overhead is *structural* — `cb_eval` runs the graph node-by-node, defeating fusion (not our stats). `capture.stats_sample` makes the per-tensor scan tunable.
+- [x] **C13 · Search & feel.** `/` live search/filter on the packet stream (layer type / op / device / node), warm gruvbox theme, focus marker, per-layer latency in topology.
 - [x] **C14 · Record & replay** — `src/session/recorder.cpp` + `replay.cpp`. Record to NDJSON; replay feeds the *same* TUI from a file instead of the live callback (proves the schema seam, de-risks the future sidecar).
+
+## Phase 0 — Foundation infrastructure  ✅ done
+
+- [x] Core data model split: `TensorMeta` / `ActivationStats` / `LayerEvent` (`src/event.hpp`).
+- [x] Typed event bus with subscribe/publish + priority (`src/event_bus.hpp`).
+- [x] TOML config loader via toml++ (`src/config.*`, `local_llm_instrumentation.toml`) — buffer size, capture mask, anomaly, attention, theme.
+- [x] spdlog file logging; CMake ASAN/UBSAN/TSAN presets; clang-format/clang-tidy; Catch2 tests (24); GitHub Actions CI.
+
+## Phase 7 — Export (partial)
+
+- [x] Per-layer stats summary → CSV / JSON (`src/export.hpp`, `--export-csv/--export-json`).
+- [ ] HTML self-contained report with embedded SVG flamegraph.
+
+## Backlog — next candidates
+
+- [ ] **Latency flamegraph panel** (Phase 5) — ASCII bars per layer sorted by compute time (export data already supports it).
+- [ ] **Crash/panic handler** (Phase 3) — restore the terminal on signal/exception.
+- [ ] **Replay scrubber** (Phase 6) — step / pause / speed over a recorded session.
+- [ ] **Mask-in-`ask` overhead cut** — return false in the cb_eval ask phase for masked classes so they skip the callback entirely.
 
 ## Phase 5 — Platform (post-MVP, not built now)
 
 - [ ] PyTorch sidecar (`register_forward_hook` + `output_attentions` → FlatBuffers over loopback socket → same TUI).
-- [ ] TF/Keras adapter; export to JSON/NDJSON/protobuf; packaging.
+- [ ] TF/Keras adapter; FlatBuffers `.llmtrace` sessions; packaging.
 
 ---
 
