@@ -7,3 +7,7 @@
 *.log
 *.ndjson
 preview.*
+summary.csv
+summary.json
+out.csv
+out.json
