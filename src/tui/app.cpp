@@ -396,6 +396,9 @@ Element render_metrics(const UiState::Snapshot& s) {
                   text("[" + std::to_string(m.v_min) + ", " +
                        std::to_string(m.v_max) + "]  mean " +
                        std::to_string(m.v_mean)) | color(C_ACCENT)),
+               kv("Std / L2 Norm: ",
+                  text(std::to_string(m.v_std) + "  /  " +
+                       std::to_string(m.l2_norm)) | color(C_ACCENT)),
                kv("NaN / Inf    : ", nan_inf),
            }) |
            flex;
