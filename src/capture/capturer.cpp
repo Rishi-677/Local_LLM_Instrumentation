@@ -21,35 +21,34 @@ constexpr int64_t kAttnMaxDim = 256; // cap attention matrix rows/cols
 // tokens, then heads. Extract the [query x key] slice for one head into a
 // row-major AttentionPayload. Called only for the selected layer, so the
 // allocation here is off the per-op hot path for every other node.
-void extract_attention(const ggml_tensor * t, int layer, AttentionSink & sink) {
+bool build_attention(const ggml_tensor * t, int layer, int head_want, AttentionPayload & out) {
     const int64_t n_kv   = t->ne[0];
     const int64_t n_tok  = t->ne[1];
     const int64_t n_head = t->ne[2] > 0 ? t->ne[2] : 1;
 
-    int head = sink.target_head.load(std::memory_order_acquire);
+    int head = head_want;
     if (head < 0) head = 0;
     if (head >= n_head) head = static_cast<int>(n_head - 1);
 
     const int64_t rows = std::min<int64_t>(n_tok, kAttnMaxDim);
     const int64_t cols = std::min<int64_t>(n_kv,  kAttnMaxDim);
-    if (rows <= 0 || cols <= 0) return;
+    if (rows <= 0 || cols <= 0) return false;
 
     const float * data = static_cast<const float *>(t->data);
     const int64_t head_off = static_cast<int64_t>(head) * n_kv * n_tok;
 
-    AttentionPayload p;
-    p.layer_idx = layer;
-    p.head      = head;
-    p.rows      = static_cast<int>(rows);
-    p.cols      = static_cast<int>(cols);
-    p.weights.resize(static_cast<size_t>(rows) * static_cast<size_t>(cols));
+    out.layer_idx = layer;
+    out.head      = head;
+    out.rows      = static_cast<int>(rows);
+    out.cols      = static_cast<int>(cols);
+    out.weights.assign(static_cast<size_t>(rows) * static_cast<size_t>(cols), 0.0f);
 
     for (int64_t r = 0; r < rows; ++r) {
         for (int64_t c = 0; c < cols; ++c) {
-            p.weights[static_cast<size_t>(r) * cols + c] = data[head_off + r * n_kv + c];
+            out.weights[static_cast<size_t>(r) * cols + c] = data[head_off + r * n_kv + c];
         }
     }
-    sink.publish(p);
+    return true;
 }
 
 uint64_t now_ns() {
@@ -164,7 +163,17 @@ bool Capturer::capture(ggml_tensor * t) {
     if (attn_ && e.layer_idx == attn_->target_layer.load(std::memory_order_acquire) &&
         t->type == GGML_TYPE_F32 && host_readable && ggml_is_contiguous(t) &&
         std::strncmp(e.node_name, "kq_soft_max", 11) == 0) {
-        extract_attention(t, e.layer_idx, *attn_);
+        AttentionPayload p;
+        if (build_attention(t, e.layer_idx, attn_->target_head.load(std::memory_order_acquire), p)) {
+            // Keep the richest matrix: a new layer always wins; otherwise only
+            // overwrite if this pass has at least as many query rows (so the
+            // square prefill matrix isn't clobbered by 1-row generation steps).
+            if (e.layer_idx != last_attn_layer_ || p.rows >= last_attn_rows_) {
+                attn_->publish(p);
+                last_attn_layer_ = e.layer_idx;
+                last_attn_rows_  = p.rows;
+            }
+        }
     }
 
     ring_.push(e); // SPSC; drops + counts on overflow, never blocks

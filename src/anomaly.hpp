@@ -65,7 +65,8 @@ private:
 
     Config                          cfg_;
     std::vector<AnomalyRecord>      ledger_;
-    std::unordered_set<std::string> cpu_seen_;   // dedupe CPU-fallback per node
+    std::unordered_set<std::string> cpu_seen_;       // dedupe CPU-fallback per node
+    std::unordered_set<std::string> outlier_seen_;   // dedupe outliers per node
 
     static constexpr size_t kLedgerCap = 1000;
 };

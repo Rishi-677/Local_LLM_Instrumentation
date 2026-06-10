@@ -53,12 +53,19 @@ std::optional<AnomalyRecord> AnomalyDetector::inspect(const ts::TensorEvent & e)
     }
 
     // Rule 3: extreme magnitude outlier (only if stats were actually read).
+    // Deduped once per node: many tensors (e.g. pre-softmax kq scores) are
+    // legitimately large on every layer/token, and flagging each occurrence
+    // would bury everything else. We report the first time each distinct node
+    // crosses the threshold.
     if (e.stats_valid &&
         (std::fabs(e.v_max) > cfg_.extreme_abs ||
          std::fabs(e.v_min) > cfg_.extreme_abs)) {
-        return push(e.timestamp_ns, 1,
-                    "Outlier Feature " + node + ": Max " +
-                        std::to_string(e.v_max));
+        if (outlier_seen_.insert(node).second) {
+            return push(e.timestamp_ns, 1,
+                        "Outlier Feature " + node + ": Max " +
+                            std::to_string(e.v_max));
+        }
+        return std::nullopt;
     }
 
     // Rule 4: unexpected CPU fallback (opt-in; deduped once per node).

@@ -78,6 +78,11 @@ private:
     AttentionSink *       attn_ = nullptr;
     std::atomic<uint64_t> counter_{ 0 };
     std::atomic<uint64_t> prev_ns_{ 0 }; // steady_clock ns of the previous op
+
+    // Prefer the richer (square, prefill) attention matrix: don't let thin
+    // single-token generation rows overwrite it unless the target layer changed.
+    int last_attn_layer_ = -999;
+    int last_attn_rows_  = 0;
 };
 
 } // namespace ts
