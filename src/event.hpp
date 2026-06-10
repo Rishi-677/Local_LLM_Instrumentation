@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace ts {
@@ -38,40 +39,59 @@ enum class Device : uint8_t {
 constexpr int kMaxDims = 4;            // ggml tensors are up to 4D
 constexpr int kNameLen = 64;          // matches ggml's GGML_MAX_NAME
 
-// One observed tensor op in a single forward pass. ~POD, trivially copyable.
-struct TensorEvent {
-    uint64_t id          = 0;          // monotonic sequence number
-    uint64_t timestamp_ns = 0;         // capture time (steady clock)
+// The core data model is split into three locked-down shapes. Everything
+// downstream depends on these — keep them trivially copyable (the sidecar /
+// session seam) and additive-only.
+//
+//   TensorMeta       — static description of one tensor (name, shape, dtype, device)
+//   ActivationStats  — cheap numeric summary computed from its values
+//   LayerEvent       — one observed op in a forward pass = meta + stats + timing
+//
+// LayerEvent composes the two via (public) inheritance so callers can read flat
+// fields (ev.shape, ev.v_min) AND pass the sub-shapes (TensorMeta, ActivationStats)
+// around independently, e.g. to a stats engine or serializer.
 
-    int32_t  layer_idx   = -1;         // -1 = not layer-scoped (embed/output)
-    OpClass  op_class    = OpClass::Other;
-    Device   device      = Device::CPU;
-
+// Static description of a single tensor.
+struct TensorMeta {
     char     node_name[kNameLen] = {}; // ggml tensor name, e.g. "ffn_out-12"
     char     op_name[kNameLen]   = {}; // ggml op name, e.g. "MUL_MAT"
-
     std::array<int64_t, kMaxDims> shape = {0, 0, 0, 0};
-    int32_t  dtype       = 0;          // ggml_type enum value
-    int32_t  dtype_size  = 0;          // bytes per element
-
-    uint64_t latency_us  = 0;          // time since previous op on this thread
-
-    // Lightweight numeric summary (computed in the callback, cheap).
-    float    v_min  = 0.0f;
-    float    v_max  = 0.0f;
-    float    v_mean = 0.0f;
-    float    sparsity = 0.0f;          // fraction of elements ≈ 0
-    bool     has_nan = false;
-    bool     has_inf = false;
-    bool     stats_valid = false;      // false if data wasn't read (sampled out)
-
-    // Heavy payload (e.g. an attention matrix slice) is captured ONLY for the
-    // user-selected target, out-of-band, and referenced by index. 0 = none.
-    uint32_t payload_id = 0;
+    int32_t  dtype      = 0;            // ggml_type enum value
+    int32_t  dtype_size = 0;            // bytes per element
+    Device   device     = Device::CPU;
 };
 
-static_assert(std::is_trivially_copyable<TensorEvent>::value,
-              "TensorEvent must stay trivially copyable (sidecar seam)");
+// Lightweight numeric summary of a tensor's values (computed in the callback).
+struct ActivationStats {
+    float v_min     = 0.0f;
+    float v_max     = 0.0f;
+    float v_mean    = 0.0f;
+    float sparsity  = 0.0f;            // fraction of elements ≈ 0
+    bool  has_nan   = false;
+    bool  has_inf   = false;
+    bool  stats_valid = false;        // false if data wasn't read (sampled out)
+};
+
+// One observed tensor op in a single forward pass: tensor metadata + activation
+// stats + event-level identity/timing.
+struct LayerEvent : TensorMeta, ActivationStats {
+    uint64_t id           = 0;        // monotonic sequence number
+    uint64_t timestamp_ns = 0;        // capture time (steady clock)
+    int32_t  layer_idx    = -1;       // -1 = not layer-scoped (embed/output)
+    OpClass  op_class     = OpClass::Other;
+    uint64_t latency_us   = 0;        // time since previous op on this thread
+    // Heavy payload (e.g. an attention matrix slice) is captured ONLY for the
+    // user-selected target, out-of-band, and referenced by index. 0 = none.
+    uint32_t payload_id   = 0;
+};
+
+// Back-compat alias: the codebase grew up calling this TensorEvent.
+using TensorEvent = LayerEvent;
+
+static_assert(std::is_trivially_copyable<LayerEvent>::value,
+              "LayerEvent must stay trivially copyable (session / sidecar seam)");
+static_assert(std::is_trivially_copyable<TensorMeta>::value, "");
+static_assert(std::is_trivially_copyable<ActivationStats>::value, "");
 
 // ---------------------------------------------------------------------------
 // Topology: assembled incrementally from observed node names. Not on the hot
