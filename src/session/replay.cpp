@@ -173,6 +173,10 @@ bool Replay::next(ts::TensorEvent & out) {
                 e.v_max = std::strtof(t.c_str(), nullptr);
             } else if (key == "v_mean") {
                 e.v_mean = std::strtof(t.c_str(), nullptr);
+            } else if (key == "v_std") {
+                e.v_std = std::strtof(t.c_str(), nullptr);
+            } else if (key == "l2_norm") {
+                e.l2_norm = std::strtof(t.c_str(), nullptr);
             } else if (key == "sparsity") {
                 e.sparsity = std::strtof(t.c_str(), nullptr);
             } else if (key == "has_nan") {

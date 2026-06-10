@@ -91,6 +91,8 @@ void Recorder::write(const ts::TensorEvent & e) {
     line += ",\"v_min\":";      line += fnum(e.v_min);
     line += ",\"v_max\":";      line += fnum(e.v_max);
     line += ",\"v_mean\":";     line += fnum(e.v_mean);
+    line += ",\"v_std\":";      line += fnum(e.v_std);
+    line += ",\"l2_norm\":";    line += fnum(e.l2_norm);
     line += ",\"sparsity\":";   line += fnum(e.sparsity);
 
     line += ",\"has_nan\":";    line += (e.has_nan ? "true" : "false");
