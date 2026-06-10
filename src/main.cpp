@@ -26,6 +26,7 @@
 #include "anomaly.hpp"
 #include "session/recorder.hpp"
 #include "session/replay.hpp"
+#include "export.hpp"
 #include "tui/ui_state.hpp"
 #include "tui/app.hpp"
 
@@ -54,6 +55,8 @@ struct Options {
     bool  preview        = false;// render one TUI frame to stdout and exit
     std::string preview_filter;  // optional stream filter for --preview
     bool  bench          = false;// measure hook overhead (hooked vs baseline)
+    std::string export_csv;      // headless: write per-layer summary CSV
+    std::string export_json;     // headless: write per-layer summary JSON
     bool  help           = false;
 
     // Sourced from config (TOML) as a baseline, overridable on the CLI.
@@ -89,6 +92,8 @@ void print_usage(std::FILE* f) {
         "  --headless               run to completion without the TUI (verify / CI)\n"
         "  --preview                render one TUI frame to stdout and exit\n"
         "  --bench                  measure hook overhead (hooked vs baseline) and exit\n"
+        "  --export-csv <file>      write a per-layer stats summary as CSV (headless)\n"
+        "  --export-json <file>     write a per-layer stats summary as JSON (headless)\n"
         "  -h, --help               show this help\n");
 }
 
@@ -115,6 +120,8 @@ void apply_cli(int argc, char** argv, Options& o) {
         else if (a == "--preview")           o.preview = true;
         else if (a == "--preview-filter")    { o.preview = true; o.preview_filter = next("--preview-filter"); }
         else if (a == "--bench")             o.bench = true;
+        else if (a == "--export-csv")        { o.headless = true; o.export_csv = next("--export-csv"); }
+        else if (a == "--export-json")       { o.headless = true; o.export_json = next("--export-json"); }
         else if (a == "-h" || a == "--help") o.help = true;
         else                                 pos.push_back(a);
     }
@@ -491,6 +498,8 @@ int main(int argc, char** argv) {
         uint64_t total = 0, anomalies = 0;
         bool got_attention = false;
         int  att_rows = 0, att_cols = 0;
+        ts::Summary summary;
+        const bool want_summary = !opt.export_csv.empty() || !opt.export_json.empty();
         ts::TensorEvent ev;
         while (!producer_done.load(std::memory_order_acquire) || ring.size_approx() > 0) {
             while (ring.pop(ev)) {
@@ -498,6 +507,7 @@ int main(int argc, char** argv) {
                 topo.update(ev);
                 if (auto a = detector.inspect(ev)) ++anomalies;
                 if (recorder) recorder->write(ev);
+                if (want_summary) summary.add(ev);
             }
             ts::AttentionPayload ap;
             if (attn_sink.take(ap)) { got_attention = true; att_rows = ap.rows; att_cols = ap.cols; }
@@ -514,6 +524,16 @@ int main(int argc, char** argv) {
         else               std::printf("  attention captured  : no\n");
         std::printf("  events dropped      : %zu\n", ring.dropped());
         if (recorder) { recorder->close(); std::printf("  recorded to         : %s\n", opt.record.c_str()); }
+        if (!opt.export_csv.empty()) {
+            bool ok = summary.write_csv(opt.export_csv);
+            std::printf("  exported CSV        : %s (%zu rows)%s\n", opt.export_csv.c_str(),
+                        summary.rows(), ok ? "" : " [FAILED]");
+        }
+        if (!opt.export_json.empty()) {
+            bool ok = summary.write_json(opt.export_json);
+            std::printf("  exported JSON       : %s (%zu rows)%s\n", opt.export_json.c_str(),
+                        summary.rows(), ok ? "" : " [FAILED]");
+        }
         llama_backend_free();
         return 0;
     }
