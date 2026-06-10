@@ -66,7 +66,9 @@ struct ActivationStats {
     float v_min     = 0.0f;
     float v_max     = 0.0f;
     float v_mean    = 0.0f;
-    float sparsity  = 0.0f;            // fraction of elements ≈ 0
+    float v_std     = 0.0f;           // population standard deviation
+    float l2_norm   = 0.0f;           // sqrt(sum of squares) over the scan
+    float sparsity  = 0.0f;           // fraction of elements ≈ 0
     bool  has_nan   = false;
     bool  has_inf   = false;
     bool  stats_valid = false;        // false if data wasn't read (sampled out)

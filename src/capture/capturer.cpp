@@ -9,12 +9,12 @@
 #include "ggml-backend.h"
 
 #include "topology.hpp"
+#include "../stats.hpp"
 
 namespace ts {
 
 namespace {
 
-constexpr size_t kMaxScan = 65536; // cap element scan in the hot path
 constexpr int64_t kAttnMaxDim = 256; // cap attention matrix rows/cols
 
 // kq_soft_max has shape [n_kv, n_tokens, n_head]: keys fastest, then query
@@ -81,45 +81,11 @@ Device device_of(const ggml_tensor * t) {
 }
 
 // Cheap F32 numeric summary over (a sample of) the contiguous tensor data.
+// Delegates to the pure, unit-tested compute_stats(); LayerEvent inherits
+// ActivationStats, so we assign the base slice directly.
 void fill_stats(const ggml_tensor * t, TensorEvent & e) {
-    const int64_t n = ggml_nelements(t);
-    if (n <= 0) return;
-
-    const float * data = static_cast<const float *>(t->data);
-
-    // Sample with a stride if the tensor is larger than the scan cap.
-    int64_t stride = 1;
-    if (static_cast<size_t>(n) > kMaxScan) {
-        stride = n / static_cast<int64_t>(kMaxScan);
-        if (stride < 1) stride = 1;
-    }
-
-    float    vmin = data[0];
-    float    vmax = data[0];
-    double   sum  = 0.0;
-    uint64_t count = 0;
-    uint64_t zeros = 0;
-    bool     nan = false;
-    bool     inf = false;
-
-    for (int64_t i = 0; i < n; i += stride) {
-        const float v = data[i];
-        if (std::isnan(v)) { nan = true; continue; }
-        if (std::isinf(v)) { inf = true; continue; }
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
-        sum += v;
-        if (std::fabs(v) < 1e-6f) ++zeros;
-        ++count;
-    }
-
-    e.v_min    = vmin;
-    e.v_max    = vmax;
-    e.v_mean   = count ? static_cast<float>(sum / static_cast<double>(count)) : 0.0f;
-    e.sparsity = count ? static_cast<float>(zeros) / static_cast<float>(count) : 0.0f;
-    e.has_nan  = nan;
-    e.has_inf  = inf;
-    e.stats_valid = true;
+    static_cast<ActivationStats &>(e) =
+        compute_stats(static_cast<const float *>(t->data), ggml_nelements(t));
 }
 
 } // namespace
