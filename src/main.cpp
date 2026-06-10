@@ -48,7 +48,26 @@ struct Options {
     float anomaly_thresh = 1e4f;
     bool  no_flash_attn  = true; // default OFF so attention matrices materialize
     bool  headless       = false;// run to completion without the TUI (verify/CI)
+    bool  help           = false;
 };
+
+void print_usage(std::FILE* f) {
+    std::fprintf(f,
+        "Local_LLM_Instrumentation - terminal-native live debugger for local LLMs\n\n"
+        "usage:\n"
+        "  local_llm_instrumentation <model.gguf> [prompt] [options]\n"
+        "  local_llm_instrumentation --replay <session.ndjson> [options]\n\n"
+        "options:\n"
+        "  --record <file>          record telemetry to NDJSON\n"
+        "  --replay <file>          replay a recorded session (no model)\n"
+        "  --max-tokens <n>         tokens to generate (default 64)\n"
+        "  --delay-ms <n>           pace tokens/events so the run is watchable\n"
+        "  --anomaly-threshold <x>  |value| above x flags an outlier (default 1e4)\n"
+        "  --no-flash-attn          disable flash attention (default; exposes attention)\n"
+        "  --flash-attn             allow auto flash attention (hides attention matrix)\n"
+        "  --headless               run to completion without the TUI (verify / CI)\n"
+        "  -h, --help               show this help\n");
+}
 
 Options parse_args(int argc, char** argv) {
     Options o;
@@ -67,6 +86,7 @@ Options parse_args(int argc, char** argv) {
         else if (a == "--flash-attn")        o.no_flash_attn = false;
         else if (a == "--no-flash-attn")     o.no_flash_attn = true;
         else if (a == "--headless")          o.headless = true;
+        else if (a == "-h" || a == "--help") o.help = true;
         else                                 pos.push_back(a);
     }
     if (!pos.empty()) o.model  = pos[0];
@@ -248,23 +268,23 @@ static void replay_loop(const Options& opt,
 int main(int argc, char** argv) {
     Options opt = parse_args(argc, argv);
 
+    if (opt.help) { print_usage(stdout); return 0; }
+
     const bool replay_mode = !opt.replay.empty();
     if (opt.model.empty() && !replay_mode) {
-        std::fprintf(stderr,
-            "Local_LLM_Instrumentation — terminal-native live debugger for local LLMs\n\n"
-            "usage:\n"
-            "  local_llm_instrumentation <model.gguf> [prompt] [options]\n"
-            "  local_llm_instrumentation --replay <session.ndjson> [options]\n\n"
-            "options:\n"
-            "  --record <file>          record telemetry to NDJSON\n"
-            "  --replay <file>          replay a recorded session (no model)\n"
-            "  --max-tokens <n>         tokens to generate (default 64)\n"
-            "  --delay-ms <n>           pace tokens/events so the run is watchable\n"
-            "  --anomaly-threshold <x>  |value| above x flags an outlier (default 1e4)\n"
-            "  --no-flash-attn          disable flash attention (default; exposes attention)\n"
-            "  --flash-attn             allow auto flash attention (hides attention matrix)\n"
-            "  --headless               run to completion without the TUI (verify / CI)\n");
+        print_usage(stderr);
         return 1;
+    }
+
+    // Pre-flight: fail fast with a clear message if the model file is missing,
+    // rather than surfacing it as a "LOAD FAILED" badge inside the TUI.
+    if (!replay_mode) {
+        if (std::FILE* f = std::fopen(opt.model.c_str(), "rb")) {
+            std::fclose(f);
+        } else {
+            std::fprintf(stderr, "error: model file not found: %s\n", opt.model.c_str());
+            return 1;
+        }
     }
 
     llama_log_set(quiet_log, nullptr);
@@ -312,6 +332,7 @@ int main(int argc, char** argv) {
 
         uint64_t total = 0, anomalies = 0;
         bool got_attention = false;
+        int  att_rows = 0, att_cols = 0;
         ts::TensorEvent ev;
         while (!producer_done.load(std::memory_order_acquire) || ring.size_approx() > 0) {
             while (ring.pop(ev)) {
@@ -321,7 +342,7 @@ int main(int argc, char** argv) {
                 if (recorder) recorder->write(ev);
             }
             ts::AttentionPayload ap;
-            if (attn_sink.take(ap)) got_attention = true;
+            if (attn_sink.take(ap)) { got_attention = true; att_rows = ap.rows; att_cols = ap.cols; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         producer.join();
@@ -331,7 +352,8 @@ int main(int argc, char** argv) {
         std::printf("  tensor ops captured : %llu\n", (unsigned long long)total);
         std::printf("  topology rows       : %zu\n", layers.size());
         std::printf("  anomalies flagged   : %llu\n", (unsigned long long)anomalies);
-        std::printf("  attention captured  : %s\n", got_attention ? "yes" : "no");
+        if (got_attention) std::printf("  attention captured  : yes (%dx%d)\n", att_rows, att_cols);
+        else               std::printf("  attention captured  : no\n");
         std::printf("  events dropped      : %zu\n", ring.dropped());
         if (recorder) { recorder->close(); std::printf("  recorded to         : %s\n", opt.record.c_str()); }
         llama_backend_free();

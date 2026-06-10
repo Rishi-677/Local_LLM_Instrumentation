@@ -31,11 +31,23 @@ bool build_attention(const ggml_tensor * t, int layer, int head_want, AttentionP
     if (head >= n_head) head = static_cast<int>(n_head - 1);
 
     const int64_t rows = std::min<int64_t>(n_tok, kAttnMaxDim);
-    const int64_t cols = std::min<int64_t>(n_kv,  kAttnMaxDim);
-    if (rows <= 0 || cols <= 0) return false;
+    if (rows <= 0 || n_kv <= 0) return false;
 
     const float * data = static_cast<const float *>(t->data);
     const int64_t head_off = static_cast<int64_t>(head) * n_kv * n_tok;
+
+    // The kq tensor's key dimension is padded to the KV-cache width, so most
+    // trailing columns are zero. Trim to the rightmost column that any query
+    // actually attends to, giving a dense heatmap instead of a sparse strip.
+    int64_t active = 0;
+    for (int64_t c = std::min<int64_t>(n_kv, kAttnMaxDim) - 1; c >= 0; --c) {
+        bool used = false;
+        for (int64_t r = 0; r < rows; ++r) {
+            if (std::fabs(data[head_off + r * n_kv + c]) > 1e-4f) { used = true; break; }
+        }
+        if (used) { active = c + 1; break; }
+    }
+    const int64_t cols = active > 0 ? active : std::min<int64_t>(n_kv, kAttnMaxDim);
 
     out.layer_idx = layer;
     out.head      = head;
