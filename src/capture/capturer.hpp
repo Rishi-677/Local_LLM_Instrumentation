@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -70,12 +71,18 @@ public:
     // captured out-of-band. Optional; null disables attention capture.
     void set_attention_sink(AttentionSink * sink) { attn_ = sink; }
 
+    // Per-OpClass capture mask (indexed by static_cast<int>(OpClass)). Events
+    // whose class is masked off are skipped before the ring enqueue, keeping
+    // them off the hot path entirely.
+    void set_capture_mask(const std::array<bool, 6> & mask) { mask_ = mask; }
+
 private:
     // Per-instance hot path, invoked from the static trampoline.
     bool capture(ggml_tensor * t);
 
     EventRing &           ring_;
     AttentionSink *       attn_ = nullptr;
+    std::array<bool, 6>   mask_ = {true, true, true, true, true, true};
     std::atomic<uint64_t> counter_{ 0 };
     std::atomic<uint64_t> prev_ns_{ 0 }; // steady_clock ns of the previous op
 

@@ -125,6 +125,10 @@ bool Capturer::capture(ggml_tensor * t) {
     e.op_class  = cls;
     e.layer_idx = layer;
 
+    // Capture mask: drop masked-off classes before any further work.
+    const int ci = static_cast<int>(cls);
+    if (ci >= 0 && ci < 6 && !mask_[ci]) return true;
+
     e.device = device_of(t);
 
     // Cheap stats only when we can safely read contiguous F32 host data.

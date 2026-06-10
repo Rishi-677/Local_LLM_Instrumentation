@@ -19,6 +19,8 @@
 
 #include "event.hpp"
 #include "ring_buffer.hpp"
+#include "config.hpp"
+#include "log.hpp"
 #include "capture/capturer.hpp"
 #include "capture/topology.hpp"
 #include "anomaly.hpp"
@@ -27,6 +29,7 @@
 #include "tui/ui_state.hpp"
 #include "tui/app.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -50,6 +53,17 @@ struct Options {
     bool  headless       = false;// run to completion without the TUI (verify/CI)
     bool  preview        = false;// render one TUI frame to stdout and exit
     bool  help           = false;
+
+    // Sourced from config (TOML) as a baseline, overridable on the CLI.
+    std::string config_path;
+    bool        print_config = false;
+    size_t      ring_capacity = 32768;
+    int         attn_layer = 0;
+    int         attn_head  = 0;
+    bool        flag_cpu_fallback = false;
+    // Per-OpClass capture mask, indexed by static_cast<int>(OpClass):
+    // {Embed, Attn, MLP, Norm, Output, Other}.
+    std::array<bool, 6> capture_mask = {true, true, true, true, true, true};
 };
 
 void print_usage(std::FILE* f) {
@@ -59,6 +73,9 @@ void print_usage(std::FILE* f) {
         "  local_llm_instrumentation <model.gguf> [prompt] [options]\n"
         "  local_llm_instrumentation --replay <session.ndjson> [options]\n\n"
         "options:\n"
+        "  --config <file>          load settings from a TOML config (CLI overrides)\n"
+        "  --print-config           print the effective config and exit\n"
+        "  --ring-capacity <n>      telemetry ring buffer capacity (events)\n"
         "  --record <file>          record telemetry to NDJSON\n"
         "  --replay <file>          replay a recorded session (no model)\n"
         "  --max-tokens <n>         tokens to generate (default 64)\n"
@@ -71,8 +88,8 @@ void print_usage(std::FILE* f) {
         "  -h, --help               show this help\n");
 }
 
-Options parse_args(int argc, char** argv) {
-    Options o;
+// Apply CLI flags over an Options already seeded from config (CLI wins).
+void apply_cli(int argc, char** argv, Options& o) {
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -80,10 +97,13 @@ Options parse_args(int argc, char** argv) {
             if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", what); return ""; }
             return argv[++i];
         };
-        if      (a == "--record")            o.record = next("--record");
+        if      (a == "--config")            o.config_path = next("--config");
+        else if (a == "--print-config")      o.print_config = true;
+        else if (a == "--record")            o.record = next("--record");
         else if (a == "--replay")            o.replay = next("--replay");
         else if (a == "--max-tokens")        o.max_tokens = std::atoi(next("--max-tokens").c_str());
         else if (a == "--delay-ms")          o.delay_ms = std::atoi(next("--delay-ms").c_str());
+        else if (a == "--ring-capacity")     o.ring_capacity = (size_t)std::strtoull(next("--ring-capacity").c_str(), nullptr, 10);
         else if (a == "--anomaly-threshold") o.anomaly_thresh = (float)std::atof(next("--anomaly-threshold").c_str());
         else if (a == "--flash-attn")        o.no_flash_attn = false;
         else if (a == "--no-flash-attn")     o.no_flash_attn = true;
@@ -94,7 +114,20 @@ Options parse_args(int argc, char** argv) {
     }
     if (!pos.empty()) o.model  = pos[0];
     if (pos.size() > 1) o.prompt = pos[1];
-    return o;
+}
+
+// Seed Options defaults from a loaded Config (before CLI overrides).
+void seed_from_config(Options& o, const ts::Config& c) {
+    o.max_tokens       = c.max_tokens;
+    o.delay_ms         = c.delay_ms;
+    o.anomaly_thresh   = c.anomaly_threshold;
+    o.no_flash_attn    = c.no_flash_attn;
+    o.ring_capacity    = c.ring_capacity;
+    o.attn_layer       = c.attention_layer;
+    o.attn_head        = c.attention_head;
+    o.flag_cpu_fallback = c.flag_cpu_fallback;
+    o.capture_mask = { c.capture_embed, c.capture_attn, c.capture_mlp,
+                       c.capture_norm, /*Output*/ true, c.capture_other };
 }
 
 // Redirect llama.cpp's verbose loader logging away from the TUI screen.
@@ -175,6 +208,7 @@ static void inference_loop(const Options& opt,
     DoneGuard guard{done};
     ts::Capturer capturer(ring);
     capturer.set_attention_sink(attn_sink);
+    capturer.set_capture_mask(opt.capture_mask);
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
@@ -269,9 +303,27 @@ static void replay_loop(const Options& opt,
 }
 
 int main(int argc, char** argv) {
-    Options opt = parse_args(argc, argv);
+    Options opt;
+
+    // Pre-scan for --config so the file can seed defaults before CLI overrides.
+    for (int i = 1; i < argc - 1; ++i)
+        if (std::string(argv[i]) == "--config") opt.config_path = argv[i + 1];
+
+    std::string cfg_err;
+    ts::Config cfg = opt.config_path.empty()
+                         ? ts::Config::defaults()
+                         : ts::Config::load(opt.config_path, &cfg_err);
+    seed_from_config(opt, cfg);
+    apply_cli(argc, argv, opt);
 
     if (opt.help) { print_usage(stdout); return 0; }
+    if (opt.print_config) { std::fputs(cfg.to_string().c_str(), stdout); return 0; }
+
+    ts::log::init();
+    if (!cfg_err.empty())
+        spdlog::warn("config load error ({}): {}", opt.config_path, cfg_err);
+    spdlog::info("Local_LLM_Instrumentation starting (theme={}, ring_capacity={})",
+                 cfg.theme, opt.ring_capacity);
 
     const bool replay_mode = !opt.replay.empty();
     if (opt.model.empty() && !replay_mode) {
@@ -293,10 +345,11 @@ int main(int argc, char** argv) {
     llama_log_set(quiet_log, nullptr);
     llama_backend_init();
 
-    ts::EventRing       ring(1u << 15);
+    ts::EventRing       ring(opt.ring_capacity);
     ts::UiState         ui;
     ts::Topology        topo;
-    ts::AnomalyDetector detector(ts::AnomalyDetector::Config{opt.anomaly_thresh, false});
+    ts::AnomalyDetector detector(
+        ts::AnomalyDetector::Config{opt.anomaly_thresh, opt.flag_cpu_fallback});
 
     std::unique_ptr<ts::Recorder> recorder;
     if (!opt.record.empty()) {
@@ -311,13 +364,14 @@ int main(int argc, char** argv) {
     ui.set_session_state(replay_mode ? "REPLAY" : "LIVE");
 
     ts::AttentionSink attn_sink;
-    // Default the attention target to layer 0 so the prompt's self-attention
+    // Default the attention target (from config) so the prompt's self-attention
     // matrix is captured during prefill, before the user selects anything.
-    attn_sink.target_layer.store(0, std::memory_order_release);
+    attn_sink.target_layer.store(opt.attn_layer, std::memory_order_release);
+    attn_sink.target_head.store(opt.attn_head, std::memory_order_release);
 
     std::atomic<bool> alive{true};
     std::atomic<bool> producer_done{false};
-    std::atomic<int>  target_layer{0};
+    std::atomic<int>  target_layer{opt.attn_layer};
     std::atomic<int>  pending_select{-2};
 
     auto start_producer = [&]() {
