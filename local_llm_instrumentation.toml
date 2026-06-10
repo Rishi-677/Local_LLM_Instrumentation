@@ -1,0 +1,41 @@
+# Local_LLM_Instrumentation configuration.
+#
+# Every key below is shown at its built-in default; deleting a key (or the whole
+# file) restores that default. Unknown keys are ignored. Pass with --config.
+
+[buffer]
+# Number of events held in the lock-free ring buffer.
+ring_capacity = 32768
+
+[session]
+# Tokens to generate before the session stops.
+max_tokens = 64
+# Artificial per-token delay in milliseconds (0 = run as fast as possible).
+delay_ms = 0
+
+[capture]
+# Op-class capture mask: which tensor classes get recorded.
+embed = true
+attn = true
+mlp = true
+norm = true
+other = true
+# Disable flash-attention so raw attention scores remain observable.
+no_flash_attn = true
+
+[anomaly]
+# |value| above this magnitude is flagged as an outlier.
+threshold = 1e4
+# Flag CPU-fallback ops (useful only on mixed CPU/GPU runs).
+flag_cpu_fallback = false
+
+[attention]
+# Default attention payload target.
+layer = 0
+head = 0
+
+[theme]
+# TUI color theme.
+name = "gruvbox"
+# Use Nerd Font glyphs for icons.
+nerd_fonts = true
