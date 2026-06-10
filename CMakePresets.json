@@ -1,0 +1,90 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (Release)",
+      "description": "Release build using Ninja. The cache var LOCAL_LLM_INSTRUMENTATION_SANITIZE is consumed by CMakeLists.txt, which wires it to -fsanitize=<value> compile/link flags (empty = no sanitizer).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build using Ninja.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug + AddressSanitizer",
+      "description": "Debug build with LOCAL_LLM_INSTRUMENTATION_SANITIZE=address; CMakeLists adds -fsanitize=address.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LOCAL_LLM_INSTRUMENTATION_SANITIZE": "address"
+      }
+    },
+    {
+      "name": "ubsan",
+      "displayName": "Debug + UndefinedBehaviorSanitizer",
+      "description": "Debug build with LOCAL_LLM_INSTRUMENTATION_SANITIZE=undefined; CMakeLists adds -fsanitize=undefined.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LOCAL_LLM_INSTRUMENTATION_SANITIZE": "undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug + ThreadSanitizer",
+      "description": "Debug build with LOCAL_LLM_INSTRUMENTATION_SANITIZE=thread; CMakeLists adds -fsanitize=thread.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LOCAL_LLM_INSTRUMENTATION_SANITIZE": "thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "displayName": "Default (Release)",
+      "configurePreset": "default"
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug + AddressSanitizer",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "ubsan",
+      "displayName": "Debug + UndefinedBehaviorSanitizer",
+      "configurePreset": "ubsan"
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug + ThreadSanitizer",
+      "configurePreset": "tsan"
+    }
+  ]
+}

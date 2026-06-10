@@ -1,0 +1,17 @@
+# Local_LLM_Instrumentation static analysis configuration.
+# Practical set of checks; noisy/low-value checks disabled explicitly.
+Checks: >
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-vararg
+
+HeaderFilterRegex: 'src/.*'
+WarningsAsErrors: ''

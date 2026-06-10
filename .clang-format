@@ -1,0 +1,33 @@
+# Local_LLM_Instrumentation C++ style — based on Google with project overrides.
+# Matches src/event.hpp / src/ring_buffer.hpp: 4-space indent, 100 cols,
+# left-aligned pointers, attached (K&R) braces, sorted includes, short
+# blocks/ifs kept on their own lines.
+---
+Language: Cpp
+BasedOnStyle: Google
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+
+ColumnLimit: 100
+
+PointerAlignment: Left
+DerivePointerAlignment: false
+
+# K&R-ish: braces attached to their statement.
+BreakBeforeBraces: Attach
+
+# Keep short constructs un-collapsed for readability.
+AllowShortBlocksOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+
+# Includes.
+SortIncludes: true
+IncludeBlocks: Preserve
