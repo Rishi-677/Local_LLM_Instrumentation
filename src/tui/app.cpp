@@ -122,6 +122,14 @@ bool is_layer_row(const std::string& label) {
            label == "output" || label == "other";
 }
 
+// Accumulated latency as ms (>=1ms) or µs, for the topology / metrics views.
+std::string fmt_latency(uint64_t us) {
+    char b[24];
+    if (us >= 1000) std::snprintf(b, sizeof(b), "%.1f ms", us / 1000.0);
+    else            std::snprintf(b, sizeof(b), "%llu µs", (unsigned long long)us);
+    return b;
+}
+
 // ---- Pane 1: MODEL TOPOLOGY ----------------------------------------------
 Element render_topology(const UiState::Snapshot& s, bool /*focused*/) {
     Elements rows;
@@ -136,21 +144,26 @@ Element render_topology(const UiState::Snapshot& s, bool /*focused*/) {
         const bool cursor = (i == s.selected);
         const bool layer  = is_layer_row(n.label);
 
-        Element row;
+        Elements parts;
         if (layer) {
             const char* glyph = n.selected ? "▼ " : "▶ ";
             Element lbl = text(n.label) | color(n.selected ? C_KEY : C_TEXT);
             if (n.selected) lbl = lbl | bold;
-            Elements parts{ text("  "), text(glyph) | color(C_KEY), lbl };
+            parts = { text("  "), text(glyph) | color(C_KEY), lbl };
             if (n.selected)
-                parts.push_back(text("  [Active Capture Target]") |
-                                color(C_AQUA));
-            row = hbox(std::move(parts));
+                parts.push_back(text("  [Active Capture Target]") | color(C_AQUA));
         } else {
-            row = hbox({text("     ● ") | color(C_DIM),
-                        text(n.label) | color(C_ACCENT)});
+            parts = { text("     ● ") | color(C_DIM),
+                      text(n.label) | color(C_ACCENT) };
         }
 
+        // Right-aligned accumulated latency so the dominant block stands out.
+        if (n.total_latency_us > 0) {
+            parts.push_back(filler());
+            parts.push_back(text(fmt_latency(n.total_latency_us) + " ") | color(C_DIM));
+        }
+
+        Element row = hbox(std::move(parts));
         if (cursor) row = row | bgcolor(C_SELBG);
         rows.push_back(row);
     }
