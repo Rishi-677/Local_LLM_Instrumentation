@@ -48,6 +48,7 @@ struct Options {
     float anomaly_thresh = 1e4f;
     bool  no_flash_attn  = true; // default OFF so attention matrices materialize
     bool  headless       = false;// run to completion without the TUI (verify/CI)
+    bool  preview        = false;// render one TUI frame to stdout and exit
     bool  help           = false;
 };
 
@@ -66,6 +67,7 @@ void print_usage(std::FILE* f) {
         "  --no-flash-attn          disable flash attention (default; exposes attention)\n"
         "  --flash-attn             allow auto flash attention (hides attention matrix)\n"
         "  --headless               run to completion without the TUI (verify / CI)\n"
+        "  --preview                render one TUI frame to stdout and exit\n"
         "  -h, --help               show this help\n");
 }
 
@@ -86,6 +88,7 @@ Options parse_args(int argc, char** argv) {
         else if (a == "--flash-attn")        o.no_flash_attn = false;
         else if (a == "--no-flash-attn")     o.no_flash_attn = true;
         else if (a == "--headless")          o.headless = true;
+        else if (a == "--preview")           o.preview = true;
         else if (a == "-h" || a == "--help") o.help = true;
         else                                 pos.push_back(a);
     }
@@ -356,6 +359,36 @@ int main(int argc, char** argv) {
         else               std::printf("  attention captured  : no\n");
         std::printf("  events dropped      : %zu\n", ring.dropped());
         if (recorder) { recorder->close(); std::printf("  recorded to         : %s\n", opt.record.c_str()); }
+        llama_backend_free();
+        return 0;
+    }
+
+    // ---- Preview mode: populate the UI, render ONE frame, print, exit -------
+    if (opt.preview) {
+        std::thread producer = start_producer();
+        ts::TensorEvent ev;
+        while (!producer_done.load(std::memory_order_acquire) || ring.size_approx() > 0) {
+            while (ring.pop(ev)) {
+                topo.update(ev);
+                ui.push_event(ev);
+                if (ev.layer_idx == 0) ui.set_selected_metrics(ev);
+                if (auto an = detector.inspect(ev))
+                    ui.push_anomaly({an->timestamp_ns, an->severity, an->text});
+            }
+            ts::AttentionPayload ap;
+            if (attn_sink.take(ap)) ui.set_attention(ap);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        producer.join();
+        topo.select(0);
+        ui.set_topology(topo.flatten());
+        ui.set_session_state("LIVE");
+
+        ts::App app(ui);
+        std::string frame = app.preview(150, 46);
+        std::fwrite(frame.data(), 1, frame.size(), stdout);
+        std::printf("\n");
+        if (recorder) recorder->close();
         llama_backend_free();
         return 0;
     }

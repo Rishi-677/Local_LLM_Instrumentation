@@ -15,6 +15,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 #include "ui_state.hpp"
 
@@ -35,6 +36,10 @@ public:
     // Thread-safe: nudges the render loop to redraw from the latest snapshot.
     // Safe to call before run() (no-op until the screen exists).
     void request_redraw();
+
+    // Render a single frame of the current UiState to a fixed-size text buffer
+    // (ANSI-colored). Used for headless layout preview / docs — no event loop.
+    std::string preview(int width, int height);
 
     // Invoked with the layer index when the user presses space on a topology
     // row. Set this before run(). May be called from the render thread.

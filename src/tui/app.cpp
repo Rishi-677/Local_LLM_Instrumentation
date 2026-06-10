@@ -20,13 +20,28 @@
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/screen_interactive.hpp"
 #include "ftxui/dom/elements.hpp"
+#include "ftxui/dom/node.hpp"
 #include "ftxui/screen/color.hpp"
+#include "ftxui/screen/screen.hpp"
 
 namespace ts {
 
 using namespace ftxui;
 
 namespace {
+
+// Warm gruvbox-ish palette to match the reference dashboard.
+const Color C_ACCENT = Color::RGB(234, 147, 130); // salmon — primary data
+const Color C_TEXT   = Color::RGB(213, 196, 161); // cream — normal text
+const Color C_HEAD   = Color::RGB(235, 219, 178); // bright cream — headers
+const Color C_KEY    = Color::RGB(250, 189,  47); // yellow — keys / focus
+const Color C_DIM    = Color::RGB(124, 111, 100); // dim gray
+const Color C_BORDER = Color::RGB(102,  92,  84); // border gray
+const Color C_AQUA   = Color::RGB(142, 192, 124); // green
+const Color C_ORANGE = Color::RGB(254, 128,  25); // orange
+const Color C_PURPLE = Color::RGB(211, 134, 155); // purple
+const Color C_RED    = Color::RGB(251,  73,  52); // red
+const Color C_SELBG  = Color::RGB(80,   73,  69); // selection background
 
 // Pane identity — index used by the focus cycle.
 enum Pane : int {
@@ -37,6 +52,11 @@ enum Pane : int {
     P_LEDGER    = 4,
     P_COUNT     = 5,
 };
+
+// A keycap chip like [Tab] in the header / hints.
+Element keycap(const std::string& k) {
+    return text("[" + k + "]") | color(C_KEY) | bold;
+}
 
 // Format a steady-clock ns timestamp as hh:mm:ss.mmm (wall-clock-ish; the
 // absolute epoch is irrelevant for a live debugger, the cadence is what matters).
@@ -83,88 +103,112 @@ std::string dtype_name(int32_t dtype) {
     }
 }
 
-// Title decorator: bright + bold, with a "(Focus Active)" suffix when focused.
-Element pane_title(const std::string& name, bool focused) {
-    if (focused) {
-        return hbox({text(" " + name + " ") | bold | color(Color::Black) |
-                         bgcolor(Color::Cyan),
-                     text(" (Focus Active)") | color(Color::CyanLight) | dim});
-    }
-    return text(" " + name + " ") | bold | color(Color::GrayLight);
+// Wrap a body in a square-cornered window whose title is embedded in the top
+// border, like the reference layout. Focus is shown by a yellow ▌ + label.
+Element pane(int num, const std::string& name, bool focused, Element body) {
+    const std::string t = " " + std::to_string(num) + ". " + name + " ";
+    Element title = focused
+        ? hbox({text("▌") | color(C_KEY),
+                text(t) | bold | color(C_HEAD),
+                text("(Focus Active) ") | color(C_KEY) | bold})
+        : hbox({text(t) | bold | color(C_HEAD)});
+    return window(title, body, LIGHT) | color(C_BORDER) | flex;
 }
 
-Decorator pane_border(bool focused) {
-    return [focused](Element e) {
-        Element b = border(e);
-        if (focused) b = b | color(Color::Cyan);
-        return b;
-    };
+// A layer bucket (vs. an op-class leaf) is named lowercase: "layers.N",
+// "embed", "output", "other". Op-class leaves are Capitalized ("Attn", ...).
+bool is_layer_row(const std::string& label) {
+    return label.rfind("layers.", 0) == 0 || label == "embed" ||
+           label == "output" || label == "other";
 }
 
 // ---- Pane 1: MODEL TOPOLOGY ----------------------------------------------
-Element render_topology(const UiState::Snapshot& s, bool focused) {
+Element render_topology(const UiState::Snapshot& s, bool /*focused*/) {
     Elements rows;
+    rows.push_back(hbox({text("▼ ") | color(C_KEY),
+                         text("model") | bold | color(C_HEAD)}));
     if (s.topology.empty()) {
-        rows.push_back(text(" (awaiting topology…) ") | dim);
+        rows.push_back(text("   (awaiting forward pass…)") | color(C_DIM));
     }
+
     for (int i = 0; i < static_cast<int>(s.topology.size()); ++i) {
         const LayerNode& n = s.topology[i];
-        const bool sel = (i == s.selected);
+        const bool cursor = (i == s.selected);
+        const bool layer  = is_layer_row(n.label);
 
-        std::string idx = (n.layer_idx >= 0)
-                              ? ("L" + std::to_string(n.layer_idx))
-                              : "  -";
-        std::string line = (n.selected ? "[*] " : "[ ] ") + idx + "  " +
-                           n.label + "  <" + to_string(n.op_class) + ">";
-
-        Element row = text(line);
-        if (sel) {
-            row = row | bold | color(Color::Black) |
-                  bgcolor(focused ? Color::CyanLight : Color::GrayLight);
-        } else if (n.selected) {
-            row = row | color(Color::GreenLight);
+        Element row;
+        if (layer) {
+            const char* glyph = n.selected ? "▼ " : "▶ ";
+            Element lbl = text(n.label) | color(n.selected ? C_KEY : C_TEXT);
+            if (n.selected) lbl = lbl | bold;
+            Elements parts{ text("  "), text(glyph) | color(C_KEY), lbl };
+            if (n.selected)
+                parts.push_back(text("  [Active Capture Target]") |
+                                color(C_AQUA));
+            row = hbox(std::move(parts));
+        } else {
+            row = hbox({text("     ● ") | color(C_DIM),
+                        text(n.label) | color(C_ACCENT)});
         }
+
+        if (cursor) row = row | bgcolor(C_SELBG);
         rows.push_back(row);
     }
     return vbox(std::move(rows)) | yframe | flex;
 }
 
+// Map an op class to a friendly "layer type" like the reference.
+std::string layer_type(const TensorEvent& ev) {
+    switch (ev.op_class) {
+        case OpClass::Attn:   return "Attn (Self)";
+        case OpClass::MLP:    return "MLP (SwiGLU)";
+        case OpClass::Norm:   return "LayerNorm";
+        case OpClass::Embed:  return "Embedding";
+        case OpClass::Output: return "Output";
+        default:              return std::string(ev.op_name);
+    }
+}
+
+std::string device_label(Device d) {
+    switch (d) {
+        case Device::CUDA:  return "CUDA [GPU 0]";
+        case Device::Metal: return "Metal [GPU]";
+        case Device::CPU:   return "CPU";
+        default:            return "—";
+    }
+}
+
 // ---- Pane 2: LIVE PACKET STREAM ------------------------------------------
 Element render_stream(const UiState::Snapshot& s) {
+    auto sep = [] { return separator() | color(C_BORDER); };
     Elements rows;
     rows.push_back(hbox({
-                       text("ID") | size(WIDTH, EQUAL, 7) | bold,
-                       separator(),
-                       text("TIME") | size(WIDTH, EQUAL, 13) | bold,
-                       separator(),
-                       text("OP") | size(WIDTH, EQUAL, 22) | bold,
-                       separator(),
-                       text("DEV") | bold,
-                   }));
-    rows.push_back(separator());
+        text("ID") | size(WIDTH, EQUAL, 7) | bold | color(C_HEAD),
+        sep(),
+        text("TIMESTAMP") | size(WIDTH, EQUAL, 14) | bold | color(C_HEAD),
+        sep(),
+        text("LAYER TYPE") | size(WIDTH, EQUAL, 16) | bold | color(C_HEAD),
+        sep(),
+        text("COMPUTE DEVICE") | bold | color(C_HEAD),
+    }));
+    rows.push_back(separator() | color(C_BORDER));
 
     // Newest at bottom; frame keeps the latest in view.
     for (const TensorEvent& ev : s.stream) {
-        std::string op = std::string(to_string(ev.op_class)) + "/" +
-                         std::string(ev.op_name);
-        if (op.size() > 22) op.resize(22);
-
-        Element devc = text(std::string(to_string(ev.device)));
-        if (ev.device != Device::CUDA && ev.device != Device::Metal)
-            devc = devc | color(Color::Yellow);  // CPU fallback stands out
-        else
-            devc = devc | color(Color::GreenLight);
+        const bool cpu = (ev.device != Device::CUDA && ev.device != Device::Metal);
+        Element devc = text(device_label(ev.device)) |
+                       color(cpu ? C_KEY : C_AQUA);
 
         Element row = hbox({
-            text(std::to_string(ev.id)) | size(WIDTH, EQUAL, 7),
-            separator(),
-            text(fmt_time(ev.timestamp_ns)) | size(WIDTH, EQUAL, 13),
-            separator(),
-            text(op) | size(WIDTH, EQUAL, 22),
-            separator(),
+            text(std::to_string(ev.id)) | size(WIDTH, EQUAL, 7) | color(C_ACCENT),
+            sep(),
+            text(fmt_time(ev.timestamp_ns)) | size(WIDTH, EQUAL, 14) | color(C_ACCENT),
+            sep(),
+            text(layer_type(ev)) | size(WIDTH, EQUAL, 16) | color(C_TEXT),
+            sep(),
             devc,
         });
-        if (ev.has_nan || ev.has_inf) row = row | color(Color::Red);
+        if (ev.has_nan || ev.has_inf) row = row | color(C_RED) | bold;
         rows.push_back(row);
     }
     return vbox(std::move(rows)) | yframe | flex;
@@ -192,88 +236,114 @@ Element render_attention(const UiState::Snapshot& s, int pan_row, int pan_col,
     for (float w : a.weights) wmax = std::max(wmax, std::fabs(w));
     if (wmax <= 0.0f) wmax = 1.0f;
 
-    static const char* kRamp[] = {" ", "░", "▒", "▓", "█"};
+    static const char* kRamp[] = {"··", "░░", "▒▒", "▓▓", "██"};
     constexpr int kRampN = 5;
 
     // Viewport: cap to a sensible size; pan offsets clamp inside the matrix.
-    const int vp_rows = std::min(rows, 24);
-    const int vp_cols = std::min(cols, 64);
+    const int vp_rows = std::min(rows, 16);
+    const int vp_cols = std::min(cols, 40);
     const int r0 = std::clamp(pan_row, 0, std::max(0, rows - vp_rows));
     const int c0 = std::clamp(pan_col, 0, std::max(0, cols - vp_cols));
 
-    Elements lines;
-    {
-        std::string hdr = "head " + std::to_string(a.head) + "  layer " +
-                          std::to_string(a.layer_idx) + "  [" +
-                          std::to_string(rows) + "x" + std::to_string(cols) +
-                          "]  view r" + std::to_string(r0) + " c" +
-                          std::to_string(c0) + "  x" +
-                          std::to_string(contrast).substr(0, 4);
-        lines.push_back(text(hdr) | dim);
-    }
-
+    Elements grid_lines;
     for (int r = r0; r < r0 + vp_rows && r < rows; ++r) {
         Elements cells;
+        cells.push_back(text("q" + std::to_string(r)) |
+                        size(WIDTH, EQUAL, 4) | color(C_DIM));
         for (int c = c0; c < c0 + vp_cols && c < cols; ++c) {
             float v = std::fabs(a.weights[static_cast<size_t>(r) * cols + c]) /
                       wmax;
             v = std::clamp(v * contrast, 0.0f, 1.0f);
-            int level = static_cast<int>(v * (kRampN - 1) + 0.5f);
-            level = std::clamp(level, 0, kRampN - 1);
-
-            // Color by intensity for readability beyond the glyph ramp.
-            Color fg = Color::GrayDark;
-            if (level >= 4) fg = Color::Red1;
-            else if (level == 3) fg = Color::Orange1;
-            else if (level == 2) fg = Color::Yellow1;
-            else if (level == 1) fg = Color::GreenLight;
+            int level = std::clamp(static_cast<int>(v * (kRampN - 1) + 0.5f),
+                                   0, kRampN - 1);
+            Color fg = C_BORDER;
+            if (level >= 4) fg = C_HEAD;
+            else if (level == 3) fg = C_ACCENT;
+            else if (level == 2) fg = C_ORANGE;
+            else if (level == 1) fg = C_DIM;
             cells.push_back(text(kRamp[level]) | color(fg));
         }
-        lines.push_back(hbox(std::move(cells)));
+        grid_lines.push_back(hbox(std::move(cells)));
     }
-    return vbox(std::move(lines)) | flex;
+
+    char cbuf[8];
+    std::snprintf(cbuf, sizeof(cbuf), "%.2f", contrast);
+    Element hints = vbox({
+        text("head " + std::to_string(a.head) + " · layer " +
+             std::to_string(a.layer_idx)) | color(C_HEAD) | bold,
+        text(std::to_string(rows) + " queries × " + std::to_string(cols) +
+             " keys") | color(C_DIM),
+        text("view  q" + std::to_string(r0) + "+ k" + std::to_string(c0)) |
+            color(C_DIM),
+        text("contrast x" + std::string(cbuf)) | color(C_DIM),
+        text(""),
+        hbox({keycap("h/j/k/l"), text(" Pan matrix") | color(C_TEXT)}),
+        hbox({keycap("+/-"),     text(" Weight contrast") | color(C_TEXT)}),
+        hbox({keycap("f"),       text(" Fit / reset view") | color(C_TEXT)}),
+    });
+
+    return hbox({
+        vbox(std::move(grid_lines)) | flex,
+        separator() | color(C_BORDER),
+        hints | size(WIDTH, EQUAL, 26),
+    }) | flex;
+}
+
+// A label: value row, label in cream, value in salmon.
+Element kv(const std::string& k, Element v) {
+    return hbox({text(k) | color(C_HEAD) | bold, v});
+}
+
+// Discrete colored-square sparsity bar: green fill, orange boundary, purple rest.
+Element sparsity_bar(float frac) {
+    frac = std::clamp(frac, 0.0f, 1.0f);
+    const int N = 14;
+    const int filled = static_cast<int>(frac * N + 0.5f);
+    Elements sq;
+    for (int i = 0; i < N; ++i) {
+        Color c = C_PURPLE;
+        if (i < filled)           c = C_AQUA;
+        else if (i == filled && filled < N) c = C_ORANGE;
+        sq.push_back(text("■") | color(c));
+    }
+    char pct[8];
+    std::snprintf(pct, sizeof(pct), "%.1f%%", frac * 100.0f);
+    sq.push_back(text(" " + std::string(pct)) | color(C_ACCENT));
+    return hbox(std::move(sq));
 }
 
 // ---- Pane 4: RUNTIME METRICS INSPECTOR -----------------------------------
 Element render_metrics(const UiState::Snapshot& s) {
     if (!s.has_metrics) {
-        return vbox({text(" (no metrics for selected layer yet) ") | dim}) |
-               flex;
+        return vbox({text(" (no metrics for selected layer yet) ") |
+                     color(C_DIM)}) | flex;
     }
     const TensorEvent& m = s.selected_metrics;
 
-    Element nan_inf = text("clean") | color(Color::GreenLight);
+    Element nan_inf = text("clean") | color(C_AQUA);
     if (m.has_nan || m.has_inf) {
-        std::string f = "";
+        std::string f;
         if (m.has_nan) f += "NaN ";
         if (m.has_inf) f += "Inf";
-        nan_inf = text(f) | color(Color::Red) | bold;
+        nan_inf = text(f) | color(C_RED) | bold;
     }
 
     return vbox({
-               hbox({text("node    : ") | bold,
-                     text(std::string(m.node_name))}),
-               hbox({text("op      : ") | bold,
-                     text(std::string(to_string(m.op_class)) + " / " +
-                          std::string(m.op_name))}),
-               hbox({text("shape   : ") | bold, text(shape_to_string(m.shape))}),
-               hbox({text("dtype   : ") | bold,
-                     text(dtype_name(m.dtype) + "  (" +
-                          std::to_string(m.dtype_size) + "B/elem)")}),
-               hbox({text("device  : ") | bold, text(to_string(m.device))}),
-               hbox({text("latency : ") | bold,
-                     text(std::to_string(m.latency_us) + " us")}),
-               hbox({text("range   : ") | bold,
-                     text("[" + std::to_string(m.v_min) + ", " +
-                          std::to_string(m.v_max) + "]  mean " +
-                          std::to_string(m.v_mean))}),
-               hbox({text("nan/inf : ") | bold, nan_inf}),
-               separator(),
-               hbox({text("sparsity ") | bold,
-                     gauge(std::clamp(m.sparsity, 0.0f, 1.0f)) | flex,
-                     text(" " +
-                          std::to_string(static_cast<int>(m.sparsity * 100)) +
-                          "%")}),
+               kv("Tensor Shape : ",
+                  hbox({text(shape_to_string(m.shape)) | color(C_ACCENT),
+                        text("   Dtype: ") | color(C_HEAD) | bold,
+                        text(dtype_name(m.dtype)) | color(C_ACCENT)})),
+               kv("Node         : ",
+                  text(std::string(m.node_name) + "  (" +
+                       std::string(to_string(m.op_class)) + ")") | color(C_ACCENT)),
+               kv("Sparsity Rate: ", sparsity_bar(m.sparsity)),
+               kv("Latency Delta: ",
+                  text(std::to_string(m.latency_us) + " µs") | color(C_ACCENT)),
+               kv("Value Range  : ",
+                  text("[" + std::to_string(m.v_min) + ", " +
+                       std::to_string(m.v_max) + "]  mean " +
+                       std::to_string(m.v_mean)) | color(C_ACCENT)),
+               kv("NaN / Inf    : ", nan_inf),
            }) |
            flex;
 }
@@ -282,21 +352,81 @@ Element render_metrics(const UiState::Snapshot& s) {
 Element render_ledger(const UiState::Snapshot& s) {
     Elements rows;
     if (s.anomalies.empty()) {
-        rows.push_back(text(" (no anomalies) ") | color(Color::GreenLight));
+        rows.push_back(hbox({text("✓ ") | color(C_AQUA) | bold,
+                             text("no anomalies — values within bounds") |
+                                 color(C_AQUA)}));
     }
     // Newest last; frame scrolls to keep recent ones visible.
     for (const Anomaly& a : s.anomalies) {
-        const char* glyph = (a.severity >= 2) ? "✖" : "⚠";
-        Color gc = (a.severity >= 2) ? Color::Red : Color::Yellow;
+        const bool err = (a.severity >= 2);
+        const char* glyph = err ? "✖" : "⚠";
+        Color gc = err ? C_RED : C_ORANGE;
         rows.push_back(hbox({
-            text(fmt_time(a.ts_ns)) | size(WIDTH, EQUAL, 13) | dim,
+            text(fmt_time(a.ts_ns)) | size(WIDTH, EQUAL, 14) | color(C_DIM),
             text(" "),
             text(glyph) | color(gc) | bold,
             text(" "),
-            text(a.text),
+            text(a.text) | color(err ? C_RED : C_ACCENT),
         }));
     }
     return vbox(std::move(rows)) | yframe | flex;
+}
+
+// Compose the full dashboard from a snapshot plus presentation state. Shared by
+// the live render loop and the headless preview path.
+Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
+                    int pan_col, float contrast) {
+    Color state_col = (s.session_state == "LIVE") ? C_AQUA : C_ORANGE;
+
+    // Model basename only (drop path + extension), capped, to keep the header tight.
+    std::string model = s.model_name;
+    if (auto p = model.find_last_of("/\\"); p != std::string::npos) model = model.substr(p + 1);
+    if (auto p = model.rfind(".gguf"); p != std::string::npos) model = model.substr(0, p);
+    if (model.size() > 22) model = model.substr(0, 21) + "…";
+    if (model.empty()) model = "(no model)";
+
+    auto bar = [] { return text(" │ ") | color(C_BORDER); };
+    Element header = hbox({
+        text(" Local_LLM_Instrumentation ") | bold | color(Color::Black) | bgcolor(C_ORANGE),
+        text("  "),
+        keycap("Tab"), text(" Focus") | color(C_TEXT), bar(),
+        keycap("j/k"), text(" Nav") | color(C_TEXT), bar(),
+        keycap("Spc"), text(" Target") | color(C_TEXT), bar(),
+        keycap("hjkl"), text(" Pan") | color(C_TEXT), bar(),
+        keycap("±"), text(" Contrast") | color(C_TEXT), bar(),
+        keycap("Q"), text(" Quit") | color(C_TEXT),
+        filler(),
+        text(model) | color(C_DIM),
+        text("  tok:") | color(C_HEAD), text(std::to_string(s.n_tokens)) | color(C_ACCENT),
+        text(" ev:") | color(C_HEAD), text(std::to_string(s.total_events)) | color(C_ACCENT),
+        text(" drop:") | color(C_HEAD), text(std::to_string(s.dropped)) | color(C_ACCENT),
+        text(" "),
+        text(" " + s.session_state + " ") | bold | color(Color::Black) |
+            bgcolor(state_col),
+    });
+
+    Element topo = pane(1, "MODEL TOPOLOGY", focus == P_TOPOLOGY,
+                        render_topology(s, focus == P_TOPOLOGY));
+    Element stream = pane(2, "LIVE PACKET STREAM", focus == P_STREAM,
+                          render_stream(s));
+    Element attention = pane(3, "ATTENTION MATRIX VISUALIZER", focus == P_ATTENTION,
+                             render_attention(s, pan_row, pan_col, contrast));
+    Element metrics = pane(4, "RUNTIME METRICS INSPECTOR", focus == P_METRICS,
+                           render_metrics(s));
+    Element ledger = pane(5, "NUMERICAL ANOMALY LEDGER", focus == P_LEDGER,
+                          render_ledger(s));
+
+    Element top_row =
+        hbox({topo | size(WIDTH, GREATER_THAN, 34) | flex, stream | flex}) | flex;
+    Element bottom_row = hbox({metrics | flex, ledger | flex});
+
+    return vbox({
+        header,
+        separator() | color(C_BORDER),
+        top_row,
+        attention | size(HEIGHT, GREATER_THAN, 8),
+        bottom_row | size(HEIGHT, GREATER_THAN, 9),
+    });
 }
 
 }  // namespace
@@ -309,82 +439,22 @@ void App::request_redraw() {
     if (screen_) screen_->PostEvent(Event::Custom);
 }
 
+std::string App::preview(int width, int height) {
+    Element doc = build_frame(state_.snapshot(), focus_, att_pan_row_,
+                              att_pan_col_, att_contrast_);
+    auto screen = Screen::Create(Dimension::Fixed(width), Dimension::Fixed(height));
+    Render(screen, doc);
+    return screen.ToString();
+}
+
 int App::run() {
     auto screen = ScreenInteractive::Fullscreen();
     screen_ = &screen;
 
     // One Renderer drawing the whole dashboard from a per-frame snapshot.
     auto dashboard = Renderer([this] {
-        UiState::Snapshot s = state_.snapshot();
-
-        // Header: shortcuts + session state.
-        Color state_col = Color::GreenLight;
-        if (s.session_state != "LIVE") state_col = Color::Yellow;
-
-        Element header = hbox({
-            text(" Local_LLM_Instrumentation ") | bold | color(Color::Black) |
-                bgcolor(Color::Cyan),
-            text("  " + (s.model_name.empty() ? std::string("(no model)")
-                                              : s.model_name) +
-                 "  "),
-            separator(),
-            text("  Tab focus · j/k select · space target · h/j/k/l pan · "
-                 "+/- contrast · q quit  ") |
-                dim,
-            filler(),
-            text(" tok:" + std::to_string(s.n_tokens) + " ev:" +
-                 std::to_string(s.total_events) + " drop:" +
-                 std::to_string(s.dropped) + " "),
-            text(" " + s.session_state + " ") | bold | color(Color::Black) |
-                bgcolor(state_col),
-        });
-
-        // Pane bodies.
-        Element topo = vbox({pane_title("MODEL TOPOLOGY", focus_ == P_TOPOLOGY),
-                             separator(),
-                             render_topology(s, focus_ == P_TOPOLOGY)}) |
-                       pane_border(focus_ == P_TOPOLOGY) | flex;
-
-        Element stream = vbox({pane_title("LIVE PACKET STREAM",
-                                          focus_ == P_STREAM),
-                               separator(), render_stream(s)}) |
-                         pane_border(focus_ == P_STREAM) | flex;
-
-        Element attention =
-            vbox({pane_title("ATTENTION MATRIX VISUALIZER",
-                             focus_ == P_ATTENTION),
-                  separator(),
-                  render_attention(s, att_pan_row_, att_pan_col_,
-                                   att_contrast_)}) |
-            pane_border(focus_ == P_ATTENTION) | flex;
-
-        Element metrics = vbox({pane_title("RUNTIME METRICS INSPECTOR",
-                                           focus_ == P_METRICS),
-                                separator(), render_metrics(s)}) |
-                          pane_border(focus_ == P_METRICS) | flex;
-
-        Element ledger = vbox({pane_title("NUMERICAL ANOMALY LEDGER",
-                                          focus_ == P_LEDGER),
-                               separator(), render_ledger(s)}) |
-                         pane_border(focus_ == P_LEDGER) | flex;
-
-        // Layout:
-        //   ┌ header ───────────────────────────────────┐
-        //   │ topology (tall) │ stream (tall)            │
-        //   │ attention (wide, full row)                 │
-        //   │ metrics         │ ledger                   │
-        Element top_row =
-            hbox({topo | size(WIDTH, GREATER_THAN, 34) | flex, stream | flex}) |
-            flex;
-        Element bottom_row = hbox({metrics | flex, ledger | flex});
-
-        return vbox({
-            header,
-            separator(),
-            top_row,
-            attention | size(HEIGHT, GREATER_THAN, 8),
-            bottom_row | size(HEIGHT, GREATER_THAN, 9),
-        });
+        return build_frame(state_.snapshot(), focus_, att_pan_row_,
+                           att_pan_col_, att_contrast_);
     });
 
     // Global + routed key handling.
