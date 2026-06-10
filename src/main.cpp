@@ -53,6 +53,7 @@ struct Options {
     bool  headless       = false;// run to completion without the TUI (verify/CI)
     bool  preview        = false;// render one TUI frame to stdout and exit
     std::string preview_filter;  // optional stream filter for --preview
+    bool  bench          = false;// measure hook overhead (hooked vs baseline)
     bool  help           = false;
 
     // Sourced from config (TOML) as a baseline, overridable on the CLI.
@@ -62,6 +63,7 @@ struct Options {
     int         attn_layer = 0;
     int         attn_head  = 0;
     bool        flag_cpu_fallback = false;
+    int         stats_sample = 8192;
     // Per-OpClass capture mask, indexed by static_cast<int>(OpClass):
     // {Embed, Attn, MLP, Norm, Output, Other}.
     std::array<bool, 6> capture_mask = {true, true, true, true, true, true};
@@ -86,6 +88,7 @@ void print_usage(std::FILE* f) {
         "  --flash-attn             allow auto flash attention (hides attention matrix)\n"
         "  --headless               run to completion without the TUI (verify / CI)\n"
         "  --preview                render one TUI frame to stdout and exit\n"
+        "  --bench                  measure hook overhead (hooked vs baseline) and exit\n"
         "  -h, --help               show this help\n");
 }
 
@@ -111,6 +114,7 @@ void apply_cli(int argc, char** argv, Options& o) {
         else if (a == "--headless")          o.headless = true;
         else if (a == "--preview")           o.preview = true;
         else if (a == "--preview-filter")    { o.preview = true; o.preview_filter = next("--preview-filter"); }
+        else if (a == "--bench")             o.bench = true;
         else if (a == "-h" || a == "--help") o.help = true;
         else                                 pos.push_back(a);
     }
@@ -128,6 +132,7 @@ void seed_from_config(Options& o, const ts::Config& c) {
     o.attn_layer       = c.attention_layer;
     o.attn_head        = c.attention_head;
     o.flag_cpu_fallback = c.flag_cpu_fallback;
+    o.stats_sample      = c.stats_sample;
     o.capture_mask = { c.capture_embed, c.capture_attn, c.capture_mlp,
                        c.capture_norm, /*Output*/ true, c.capture_other };
 }
@@ -211,6 +216,7 @@ static void inference_loop(const Options& opt,
     ts::Capturer capturer(ring);
     capturer.set_attention_sink(attn_sink);
     capturer.set_capture_mask(opt.capture_mask);
+    capturer.set_stats_sample(opt.stats_sample);
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
@@ -304,6 +310,97 @@ static void replay_loop(const Options& opt,
     ui.set_session_state("REPLAY DONE");
 }
 
+// ---------------------------------------------------------------------------
+// Benchmark: time generation throughput with and without the cb_eval hook to
+// quantify capture overhead. Surfaces the Phase-2 "keep the hot path cheap"
+// target. No TUI, no threads.
+// ---------------------------------------------------------------------------
+static int run_bench(const Options& opt) {
+    llama_log_set(quiet_log, nullptr);
+    llama_backend_init();
+
+    llama_model_params mparams = llama_model_default_params();
+    mparams.n_gpu_layers = 0;
+    llama_model* model = llama_model_load_from_file(opt.model.c_str(), mparams);
+    if (!model) {
+        std::fprintf(stderr, "error: failed to load model: %s\n", opt.model.c_str());
+        llama_backend_free();
+        return 1;
+    }
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+
+    std::vector<llama_token> tokens(256);
+    int n = llama_tokenize(vocab, opt.prompt.c_str(), (int)opt.prompt.size(),
+                           tokens.data(), (int)tokens.size(), true, false);
+    if (n < 0) {
+        tokens.resize(-n);
+        n = llama_tokenize(vocab, opt.prompt.c_str(), (int)opt.prompt.size(),
+                           tokens.data(), (int)tokens.size(), true, false);
+    }
+    tokens.resize(n > 0 ? n : 0);
+
+    // Time the generation of opt.max_tokens tokens (prompt prefill excluded so we
+    // measure steady-state per-token cost). Returns tokens/sec and op count.
+    auto time_run = [&](bool hook, uint64_t* ops_out) -> double {
+        ts::EventRing ring(opt.ring_capacity);
+        ts::Capturer  capturer(ring);
+        capturer.set_stats_sample(opt.stats_sample);
+
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx = 2048;
+        cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        if (hook) {
+            cp.cb_eval = &ts::Capturer::on_eval;
+            cp.cb_eval_user_data = &capturer;
+        }
+        llama_context* ctx = llama_init_from_model(model, cp);
+        llama_sampler* smpl = llama_sampler_init_greedy();
+
+        llama_batch pb = llama_batch_get_one(tokens.data(), n);
+        llama_decode(ctx, pb);  // prefill (not timed)
+
+        const auto t0 = std::chrono::steady_clock::now();
+        int gen = 0;
+        for (; gen < opt.max_tokens; ++gen) {
+            llama_token tok = llama_sampler_sample(smpl, ctx, -1);
+            if (llama_vocab_is_eog(vocab, tok)) break;
+            llama_batch b = llama_batch_get_one(&tok, 1);
+            if (llama_decode(ctx, b) != 0) break;
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(t1 - t0).count();
+
+        // Drain whatever the hook produced so we can report op throughput.
+        if (ops_out) {
+            uint64_t c = 0; ts::TensorEvent ev;
+            while (ring.pop(ev)) ++c;
+            *ops_out = c + ring.dropped();
+        }
+        llama_sampler_free(smpl);
+        llama_free(ctx);
+        return gen > 0 && secs > 0 ? gen / secs : 0.0;
+    };
+
+    uint64_t dummy = 0, ops = 0;
+    const double base   = time_run(false, &dummy);  // baseline, no hook
+    const double hooked = time_run(true,  &ops);    // hooked
+
+    const double overhead = base > 0 ? (base - hooked) / base * 100.0 : 0.0;
+    std::printf("Local_LLM_Instrumentation hook overhead benchmark (%d gen tokens)\n", opt.max_tokens);
+    std::printf("  baseline (no hook) : %.1f tok/s\n", base);
+    std::printf("  hooked             : %.1f tok/s\n", hooked);
+    std::printf("  overhead           : %.1f%%\n", overhead);
+    std::printf("  tensor ops/token   : ~%llu\n",
+                (unsigned long long)(opt.max_tokens ? ops / (unsigned)opt.max_tokens : ops));
+    std::printf("  note: most overhead is structural — cb_eval runs the graph\n"
+                "        node-by-node (no backend fusion). Mask op classes or\n"
+                "        narrow the capture to reduce observed nodes.\n");
+
+    llama_model_free(model);
+    llama_backend_free();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     Options opt;
 
@@ -343,6 +440,8 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    if (opt.bench) return run_bench(opt);
 
     llama_log_set(quiet_log, nullptr);
     llama_backend_init();

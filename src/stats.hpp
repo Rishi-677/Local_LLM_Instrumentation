@@ -20,7 +20,7 @@ namespace ts {
 inline ActivationStats compute_stats(const float* data, int64_t n,
                                      int64_t max_scan = 65536) {
     ActivationStats s;
-    if (!data || n <= 0) return s;
+    if (!data || n <= 0 || max_scan <= 0) return s;  // max_scan<=0 disables stats
 
     int64_t stride = (n > max_scan) ? (n / max_scan) : 1;
     if (stride < 1) stride = 1;

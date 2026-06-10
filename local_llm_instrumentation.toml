@@ -22,6 +22,8 @@ norm = true
 other = true
 # Disable flash-attention so raw attention scores remain observable.
 no_flash_attn = true
+# Max elements scanned per tensor for activation stats (lower = cheaper capture).
+stats_sample = 8192
 
 [anomaly]
 # |value| above this magnitude is flagged as an outlier.

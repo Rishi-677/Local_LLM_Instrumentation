@@ -37,6 +37,7 @@ struct Config {
     bool capture_norm  = true;
     bool capture_other = true;
     bool no_flash_attn = true;      // disable flash-attn so attn scores are visible
+    int  stats_sample  = 8192;      // max elements scanned per tensor for stats
 
     // [anomaly] — anomaly-detection tuning.
     float anomaly_threshold = 1e4f; // |value| above this is flagged as an outlier

@@ -82,10 +82,11 @@ Device device_of(const ggml_tensor * t) {
 
 // Cheap F32 numeric summary over (a sample of) the contiguous tensor data.
 // Delegates to the pure, unit-tested compute_stats(); LayerEvent inherits
-// ActivationStats, so we assign the base slice directly.
-void fill_stats(const ggml_tensor * t, TensorEvent & e) {
-    static_cast<ActivationStats &>(e) =
-        compute_stats(static_cast<const float *>(t->data), ggml_nelements(t));
+// ActivationStats, so we assign the base slice directly. `max_scan` bounds the
+// per-op cost on the model thread (the dominant capture overhead).
+void fill_stats(const ggml_tensor * t, TensorEvent & e, int64_t max_scan) {
+    static_cast<ActivationStats &>(e) = compute_stats(
+        static_cast<const float *>(t->data), ggml_nelements(t), max_scan);
 }
 
 } // namespace
@@ -138,7 +139,7 @@ bool Capturer::capture(ggml_tensor * t) {
         t->data != nullptr &&
         (t->buffer == nullptr || ggml_backend_buffer_is_host(t->buffer));
     if (t->type == GGML_TYPE_F32 && host_readable && ggml_is_contiguous(t)) {
-        fill_stats(t, e);
+        fill_stats(t, e, stats_sample_);
     }
 
     // Out-of-band attention capture: only the selected layer's softmax matrix.

@@ -80,6 +80,7 @@ Config Config::load(const std::string& path, std::string* error) {
         assign<bool>(*capture, "norm",          cfg.capture_norm);
         assign<bool>(*capture, "other",         cfg.capture_other);
         assign<bool>(*capture, "no_flash_attn", cfg.no_flash_attn);
+        assign<int>(*capture,  "stats_sample",  cfg.stats_sample);
     }
 
     if (auto* anomaly = root["anomaly"].as_table()) {
@@ -115,6 +116,7 @@ std::string Config::to_string() const {
        << " norm="  << (capture_norm  ? "on" : "off")
        << " other=" << (capture_other ? "on" : "off")
        << " no_flash_attn=" << (no_flash_attn ? "on" : "off") << "\n"
+       << "  capture.stats_sample = " << stats_sample << "\n"
        << "  anomaly.threshold    = " << anomaly_threshold
        << " flag_cpu_fallback=" << (flag_cpu_fallback ? "on" : "off") << "\n"
        << "  attention.layer/head = " << attention_layer << "/" << attention_head << "\n"
