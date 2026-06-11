@@ -8,7 +8,7 @@ and attention telemetry into a keyboard-driven terminal dashboard — without
 modifying the model or its code. Think `btop`/`lazygit`, but for a model's forward pass.
 
 > Status: MVP. Targets llama.cpp / GGUF as a single in-process C++ binary.
-> See [`roadmap.md`](roadmap.md) for the phased component breakdown.
+> See [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for the phased component breakdown.
 
 ## What it shows
 
