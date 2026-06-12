@@ -139,6 +139,7 @@ if(LOCAL_LLM_INSTRUMENTATION_BUILD_TESTS)
     tests/test_stats.cpp
     tests/test_config.cpp
     tests/test_export.cpp
+    tests/test_latency_flamegraph.cpp
     src/config.cpp
   )
   target_include_directories(unit_tests PRIVATE src)

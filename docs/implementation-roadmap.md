@@ -68,8 +68,8 @@ Hook llama.cpp's built-in `ggml_backend_sched_eval_callback` (`cb_eval`) to obse
 
 ## Backlog — next candidates
 
-- [ ] **Latency flamegraph panel** (Phase 5) — ASCII bars per layer sorted by compute time (export data already supports it).
-- [ ] **Crash/panic handler** (Phase 3) — restore the terminal on signal/exception.
+- [x] **Latency flamegraph panel** (Phase 5) — ASCII bars per layer sorted by compute time (export data already supports it).
+- [x] **Crash/panic handler** (Phase 3) — restore the terminal on signal/exception.
 - [ ] **Replay scrubber** (Phase 6) — step / pause / speed over a recorded session.
 - [ ] **Mask-in-`ask` overhead cut** — return false in the cb_eval ask phase for masked classes so they skip the callback entirely.
 
@@ -89,12 +89,14 @@ src/
   main.cpp                      # arg parse, load GGUF, spawn threads
   event.hpp                     # TensorEvent + LayerNode (schema seam)
   ring_buffer.hpp               # lock-free SPSC ring
+  panic.hpp                     # terminal restore on signal / panic
   capture/
     eval_callback.cpp           # cb_eval + inline stats
     topology.cpp                # name parser → tree
   anomaly.cpp                   # anomaly rules + ledger
   tui/
     app.cpp                     # FTXUI app, focus/keymap
+    latency_flamegraph.hpp      # sorted latency rows + ASCII bar model
     pane_topology.cpp
     pane_stream.cpp
     pane_attention.cpp

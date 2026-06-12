@@ -21,6 +21,7 @@
 #include "ring_buffer.hpp"
 #include "config.hpp"
 #include "log.hpp"
+#include "panic.hpp"
 #include "capture/capturer.hpp"
 #include "capture/topology.hpp"
 #include "anomaly.hpp"
@@ -409,6 +410,8 @@ static int run_bench(const Options& opt) {
 }
 
 int main(int argc, char** argv) {
+    ts::panic::install();
+
     Options opt;
 
     // Pre-scan for --config so the file can seed defaults before CLI overrides.
@@ -588,6 +591,7 @@ int main(int argc, char** argv) {
 
     std::thread producer = start_producer();
 
+    ts::panic::TerminalClaim terminal_claim;
     int rc = app.run();          // blocks on the FTXUI loop until the user quits
 
     alive.store(false, std::memory_order_release);

@@ -1,6 +1,6 @@
 // Local_LLM_Instrumentation — FTXUI TUI shell (C-TUI).
 //
-// `App` owns the 5-pane live dashboard. It reads a `UiState` snapshot once per
+// `App` owns the 6-pane live dashboard. It reads a `UiState` snapshot once per
 // frame and renders; it never blocks the producer. Input is keyboard-driven:
 //   - Tab            cycle focus between the 5 panes
 //   - j / k          move topology selection (when topology pane focused)

@@ -1,6 +1,6 @@
 // Local_LLM_Instrumentation — FTXUI TUI shell implementation (C-TUI).
 //
-// All five panes live here to keep the public surface (app.hpp) minimal. Each
+// All six panes live here to keep the public surface (app.hpp) minimal. Each
 // pane is a free function taking the per-frame Snapshot plus whatever local
 // view state it needs; App::run() wires them into a Container with a single
 // CatchEvent that owns global keys (Tab/q) and routes directional keys to the
@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+
+#include "latency_flamegraph.hpp"
 
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/event.hpp"
@@ -50,8 +52,9 @@ enum Pane : int {
     P_STREAM    = 1,
     P_ATTENTION = 2,
     P_METRICS   = 3,
-    P_LEDGER    = 4,
-    P_COUNT     = 5,
+    P_FLAME     = 4,
+    P_LEDGER    = 5,
+    P_COUNT     = 6,
 };
 
 // A keycap chip like [Tab] in the header / hints.
@@ -404,7 +407,39 @@ Element render_metrics(const UiState::Snapshot& s) {
            flex;
 }
 
-// ---- Pane 5: NUMERICAL ANOMALY LEDGER ------------------------------------
+// ---- Pane 5: LATENCY FLAMEGRAPH ------------------------------------------
+Element render_flamegraph(const UiState::Snapshot& s) {
+    const std::vector<LatencyFlameRow> rows = build_latency_flamegraph(s.topology, 10);
+    if (rows.empty()) {
+        return vbox({text(" (no latency samples yet) ") | color(C_DIM)}) | flex;
+    }
+
+    const uint64_t max_latency = rows.front().total_latency_us;
+    const uint64_t total = latency_flamegraph_total(rows);
+
+    Elements lines;
+    for (const LatencyFlameRow& row : rows) {
+        char pct[16];
+        const double share =
+            total ? (static_cast<double>(row.total_latency_us) * 100.0 /
+                     static_cast<double>(total))
+                  : 0.0;
+        std::snprintf(pct, sizeof(pct), "%5.1f%%", share);
+
+        lines.push_back(hbox({
+            text(row.label) | size(WIDTH, EQUAL, 12) | color(C_HEAD) | bold,
+            text(latency_ascii_bar(row.total_latency_us, max_latency, 24)) |
+                color(C_ACCENT),
+            text(" " + fmt_latency(row.total_latency_us)) |
+                size(WIDTH, EQUAL, 9) | color(C_TEXT),
+            text(pct) | color(C_DIM),
+        }));
+    }
+
+    return vbox(std::move(lines)) | yframe | flex;
+}
+
+// ---- Pane 6: NUMERICAL ANOMALY LEDGER ------------------------------------
 Element render_ledger(const UiState::Snapshot& s) {
     Elements rows;
     if (s.anomalies.empty()) {
@@ -470,12 +505,14 @@ Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
                              render_attention(s, pan_row, pan_col, contrast));
     Element metrics = pane(4, "RUNTIME METRICS INSPECTOR", focus == P_METRICS,
                            render_metrics(s));
-    Element ledger = pane(5, "NUMERICAL ANOMALY LEDGER", focus == P_LEDGER,
+    Element flame = pane(5, "LATENCY FLAMEGRAPH", focus == P_FLAME,
+                         render_flamegraph(s));
+    Element ledger = pane(6, "NUMERICAL ANOMALY LEDGER", focus == P_LEDGER,
                           render_ledger(s));
 
     Element top_row =
         hbox({topo | size(WIDTH, GREATER_THAN, 34) | flex, stream | flex}) | flex;
-    Element bottom_row = hbox({metrics | flex, ledger | flex});
+    Element bottom_row = hbox({metrics | flex, flame | flex, ledger | flex});
 
     return vbox({
         header,
