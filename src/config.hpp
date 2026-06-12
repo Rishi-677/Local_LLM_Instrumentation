@@ -47,6 +47,11 @@ struct Config {
     int attention_layer = 0;
     int attention_head  = 0;
 
+    // [sidecar] — PyTorch sidecar receiver.
+    bool        sidecar_enabled = false;
+    int         sidecar_port    = 9876;
+    std::string sidecar_host    = "127.0.0.1";
+
     // [theme] — TUI appearance.
     std::string theme      = "gruvbox";
     bool        nerd_fonts = true;

@@ -93,6 +93,12 @@ Config Config::load(const std::string& path, std::string* error) {
         assign<int>(*attention, "head",  cfg.attention_head);
     }
 
+    if (auto* sidecar = root["sidecar"].as_table()) {
+        assign<bool>(*sidecar, "enabled", cfg.sidecar_enabled);
+        assign<int>(*sidecar, "port",    cfg.sidecar_port);
+        assign<std::string>(*sidecar, "host", cfg.sidecar_host);
+    }
+
     if (auto* theme = root["theme"].as_table()) {
         assign<std::string>(*theme, "name", cfg.theme);
         assign<bool>(*theme, "nerd_fonts",  cfg.nerd_fonts);
@@ -120,6 +126,8 @@ std::string Config::to_string() const {
        << "  anomaly.threshold    = " << anomaly_threshold
        << " flag_cpu_fallback=" << (flag_cpu_fallback ? "on" : "off") << "\n"
        << "  attention.layer/head = " << attention_layer << "/" << attention_head << "\n"
+       << "  sidecar              = " << (sidecar_enabled ? "on" : "off")
+       << " host=" << sidecar_host << " port=" << sidecar_port << "\n"
        << "  theme.name           = " << theme
        << " nerd_fonts=" << (nerd_fonts ? "on" : "off") << "\n"
        << "}";
