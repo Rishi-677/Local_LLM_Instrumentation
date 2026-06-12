@@ -36,6 +36,12 @@ enum class Device : uint8_t {
     Other,
 };
 
+// Serialization format for recorded sessions.
+enum class RecordFormat : uint8_t {
+    NDJSON,    // human-readable newline-delimited JSON (default)
+    LLMTRACE,  // compact binary .llmtrace — raw LayerEvent structs
+};
+
 constexpr int kMaxDims = 4;            // ggml tensors are up to 4D
 constexpr int kNameLen = 64;          // matches ggml's GGML_MAX_NAME
 
