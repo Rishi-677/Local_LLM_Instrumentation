@@ -89,6 +89,7 @@ add_executable(local_llm_instrumentation
   src/config.cpp
   src/session/recorder.cpp
   src/session/replay.cpp
+  src/sidecar/receiver.cpp
   src/tui/app.cpp
 )
 
@@ -104,6 +105,11 @@ target_link_libraries(local_llm_instrumentation PRIVATE
   spdlog::spdlog
 )
 
+# Sockets for sidecar receiver (ws2_32 on Windows, implicit on POSIX).
+if(WIN32)
+  target_link_libraries(local_llm_instrumentation PRIVATE ws2_32)
+endif()
+
 # ggml's CPU backend is compiled with OpenMP (-fopenmp); on MinGW the libgomp
 # dependency is not carried transitively through the static archives, and CMake's
 # FindOpenMP reports an empty lib name (it assumes the flag is enough). Passing
@@ -118,6 +124,37 @@ if(WIN32)
 endif()
 
 local_llm_instrumentation_apply_sanitizer(local_llm_instrumentation)
+
+# ----------------------------------------------------------------------------
+# Install rules (packaging)
+# ----------------------------------------------------------------------------
+include(GNUInstallDirs)
+
+install(TARGETS local_llm_instrumentation
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(FILES
+    local_llm_instrumentation.toml
+    DESTINATION ${CMAKE_INSTALL_SYSCONFDIR})
+
+install(DIRECTORY py_sidecar/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/local_llm_instrumentation/py_sidecar
+        FILES_MATCHING PATTERN "*.py")
+
+install(FILES
+    docs/implementation-roadmap.md
+    DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
+# CPack for archive/installer generation.
+set(CPACK_PACKAGE_NAME "Local_LLM_Instrumentation")
+set(CPACK_PACKAGE_VERSION "0.1.0")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Terminal-native non-invasive live debugger for local transformer LLMs")
+set(CPACK_GENERATOR "ZIP")
+if(WIN32)
+  list(APPEND CPACK_GENERATOR "NSIS")
+endif()
+include(CPack)
 
 # ----------------------------------------------------------------------------
 # Unit tests (Catch2)

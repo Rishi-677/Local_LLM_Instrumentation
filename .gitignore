@@ -1,4 +1,5 @@
 /build/
+/dist/
 /models/
 *.gguf
 *.o
@@ -6,6 +7,9 @@
 *.exe
 *.log
 *.ndjson
+*.llmtrace
+__pycache__/
+.ccache/
 preview.*
 summary.csv
 summary.json

@@ -36,6 +36,14 @@ flag_cpu_fallback = false
 layer = 0
 head = 0
 
+[sidecar]
+# Enable PyTorch sidecar receiver (accepts telemetry from a Python hook)
+enabled = false
+# Listen port for the sidecar connection
+port = 9876
+# Listen address
+host = "127.0.0.1"
+
 [theme]
 # TUI color theme.
 name = "gruvbox"
