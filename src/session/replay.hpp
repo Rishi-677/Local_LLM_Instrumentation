@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -18,21 +19,29 @@
 
 namespace ts {
 
+// Shared scrub control for replay mode. Written by the UI thread,
+// read by the replay producer thread.
+struct ReplayControl {
+    std::atomic<bool> paused{false};
+    std::atomic<int>  step_request{0}; // >0: advance N events then re-pause
+};
+
 class Replay {
 public:
     explicit Replay(const std::string & path);
 
     bool ok() const { return static_cast<bool>(in_) && in_.is_open(); }
 
-    // Parse the next non-empty line into `out`. Returns false at EOF (or on a
-    // line that contains no recognizable object).
     bool next(ts::TensorEvent & out);
-
-    // Convenience: drain the whole file from the current position.
     std::vector<ts::TensorEvent> load_all();
 
 private:
+    bool next_ndjson(ts::TensorEvent & out);
+    bool next_llmtrace(ts::TensorEvent & out);
+
     std::ifstream in_;
+    RecordFormat  format_ = RecordFormat::NDJSON;
+    uint64_t      bin_pos_ = 0;
 };
 
 } // namespace ts

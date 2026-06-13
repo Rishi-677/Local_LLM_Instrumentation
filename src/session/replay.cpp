@@ -1,9 +1,14 @@
 // Local_LLM_Instrumentation — session replay implementation (C4).
 //
-// Minimal line-oriented parser for the flat NDJSON that Recorder emits. We scan
-// the line for "key": tokens and read the value that follows, dispatching by
-// the known key set. Values are: quoted strings (with escape handling), numbers,
-// booleans, and a single bracketed shape array. Field order is not assumed.
+// Supports two formats:
+//   NDJSON     — human-readable newline-delimited JSON (default)
+//   LLMTRACE   — compact binary (.llmtrace), raw LayerEvent records
+//
+// Format is auto-detected from the file extension (.llmtrace → binary).
+// The NDJSON parser is a minimal line-oriented scanner that handles exactly
+// the flat object shape Recorder emits (string / number / bool values, plus
+// one fixed 4-element shape array). It is tolerant of field order and
+// whitespace, so a hand-edited or differently-ordered file still loads.
 
 #include "replay.hpp"
 
@@ -15,6 +20,8 @@
 namespace ts {
 
 namespace {
+
+constexpr uint32_t kLLMTMagic = 0x544d4c4c; // "LLMT" little-endian
 
 // --- low-level scanners over a std::string + cursor -----------------------
 
@@ -51,7 +58,6 @@ bool parse_string(const std::string & s, size_t & i, std::string & out) {
                         unsigned cp = static_cast<unsigned>(
                             std::strtoul(s.substr(i, 4).c_str(), nullptr, 16));
                         i += 4;
-                        // Recorder only ever emits \u00XX for control chars.
                         out.push_back(static_cast<char>(cp & 0xff));
                     }
                     break;
@@ -86,10 +92,30 @@ void copy_into(char (&dst)[kNameLen], const std::string & src) {
     std::memcpy(dst, src.data(), n);
 }
 
+RecordFormat detect_format(const std::string & path) {
+    if (path.size() >= 9 &&
+        path.compare(path.size() - 9, 9, ".llmtrace") == 0)
+        return RecordFormat::LLMTRACE;
+    return RecordFormat::NDJSON;
+}
+
 } // namespace
 
 Replay::Replay(const std::string & path)
-    : in_(path, std::ios::in | std::ios::binary) {}
+    : in_(path, std::ios::in | std::ios::binary),
+      format_(detect_format(path)) {
+    if (format_ == RecordFormat::LLMTRACE) {
+        // Skip the 16-byte header: magic + version + reserved.
+        uint32_t header[4];
+        in_.read(reinterpret_cast<char*>(header), sizeof(header));
+        if (header[0] != kLLMTMagic) {
+            // Invalid magic — reset stream and fall back to best-effort.
+            in_.clear();
+            in_.seekg(0, std::ios::beg);
+        }
+        bin_pos_ = sizeof(header);
+    }
+}
 
 std::vector<ts::TensorEvent> Replay::load_all() {
     std::vector<ts::TensorEvent> v;
@@ -99,14 +125,19 @@ std::vector<ts::TensorEvent> Replay::load_all() {
 }
 
 bool Replay::next(ts::TensorEvent & out) {
+    if (format_ == RecordFormat::LLMTRACE)
+        return next_llmtrace(out);
+    return next_ndjson(out);
+}
+
+bool Replay::next_ndjson(ts::TensorEvent & out) {
     std::string line;
-    // Skip blank lines / lines with no object brace.
     while (std::getline(in_, line)) {
         if (line.find('{') != std::string::npos) break;
     }
     if (line.find('{') == std::string::npos) return false;
 
-    ts::TensorEvent e{}; // value-initialized defaults match the schema
+    ts::TensorEvent e{};
 
     size_t i = line.find('{') + 1;
     while (i < line.size()) {
@@ -114,7 +145,7 @@ bool Replay::next(ts::TensorEvent & out) {
         if (i >= line.size() || line[i] == '}') break;
 
         std::string key;
-        if (!parse_string(line, i, key)) break; // malformed: stop gracefully
+        if (!parse_string(line, i, key)) break;
 
         skip_ws(line, i);
         if (i < line.size() && line[i] == ':') ++i;
@@ -189,13 +220,22 @@ bool Replay::next(ts::TensorEvent & out) {
                 e.payload_id = static_cast<uint32_t>(
                     std::strtoul(t.c_str(), nullptr, 10));
             }
-            // Unknown keys: token already consumed, ignored.
         }
 
         skip_ws(line, i);
         if (i < line.size() && line[i] == ',') ++i;
     }
 
+    out = e;
+    return true;
+}
+
+bool Replay::next_llmtrace(ts::TensorEvent & out) {
+    static_assert(std::is_trivially_copyable<ts::TensorEvent>::value,
+                  "TensorEvent must be trivially copyable for binary deserialization");
+    ts::TensorEvent e{};
+    if (!in_.read(reinterpret_cast<char*>(&e), sizeof(e))) return false;
+    bin_pos_ += sizeof(e);
     out = e;
     return true;
 }
