@@ -92,11 +92,21 @@ void fill_stats(const ggml_tensor * t, TensorEvent & e, int64_t max_scan) {
 } // namespace
 
 bool Capturer::on_eval(ggml_tensor * t, bool ask, void * user_data) {
-    if (ask) {
-        return true; // observe every node
-    }
     auto * self = static_cast<Capturer *>(user_data);
     if (!self || !t) return true;
+
+    if (ask) {
+        // Early-out: skip the callback for masked classes entirely.
+        // This avoids the classify/latency/stats overhead in capture()
+        // for nodes the user has filtered out, giving a measurable
+        // throughput improvement for narrow capture masks.
+        if (t->name && t->name[0]) {
+            auto [cls, _] = classify(t->name);
+            const int ci = static_cast<int>(cls);
+            if (ci >= 0 && ci < 6 && !self->mask_[ci]) return false;
+        }
+        return true;
+    }
     return self->capture(t);
 }
 
