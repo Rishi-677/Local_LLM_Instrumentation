@@ -25,14 +25,15 @@ public:
 
     bool ok() const { return static_cast<bool>(out_) && out_.is_open(); }
 
-    // Append one event as a single NDJSON line. No-op if the stream is bad.
     void write(const ts::TensorEvent & e);
-
-    // Flush and close. Safe to call multiple times; the destructor also calls it.
     void close();
 
 private:
+    void write_ndjson(const ts::TensorEvent & e);
+    void write_llmtrace(const ts::TensorEvent & e);
+
     std::ofstream out_;
+    RecordFormat  format_ = RecordFormat::NDJSON;
 };
 
 } // namespace ts
