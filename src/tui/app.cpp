@@ -486,7 +486,9 @@ Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
         keycap("Spc"), text(" Target") | color(C_TEXT), bar(),
         keycap("hjkl"), text(" Pan") | color(C_TEXT), bar(),
         keycap("±"), text(" Contrast") | color(C_TEXT), bar(),
-        keycap("Q"), text(" Quit") | color(C_TEXT),
+        keycap("Q"), text(" Quit") | color(C_TEXT), bar(),
+        keycap("P"), text(" Pause") | color(C_TEXT), bar(),
+        keycap("S"), text(" Step") | color(C_TEXT),
         filler(),
         text(model) | color(C_DIM),
         text("  tok:") | color(C_HEAD), text(std::to_string(s.n_tokens)) | color(C_ACCENT),
@@ -586,6 +588,19 @@ int App::run() {
         if (e == Event::TabReverse) {
             focus_ = (focus_ + P_COUNT - 1) % P_COUNT;
             return true;
+        }
+
+        // ---- Replay scrub keys (p/s) ----
+        if (replay_ctrl_) {
+            if (e == Event::Character('p') || e == Event::Character('P')) {
+                bool was = replay_ctrl_->paused.exchange(true, std::memory_order_acq_rel);
+                if (was) replay_ctrl_->paused.store(false, std::memory_order_release);
+                return true;
+            }
+            if (e == Event::Character('s') || e == Event::Character('S')) {
+                replay_ctrl_->step_request.fetch_add(1, std::memory_order_acq_rel);
+                return true;
+            }
         }
 
         // ---- Topology pane keys ----

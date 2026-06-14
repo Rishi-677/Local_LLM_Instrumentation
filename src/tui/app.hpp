@@ -17,6 +17,7 @@
 #include <functional>
 #include <string>
 
+#include "../session/replay.hpp"
 #include "ui_state.hpp"
 
 namespace ftxui {
@@ -48,9 +49,14 @@ public:
     // row. Set this before run(). May be called from the render thread.
     std::function<void(int /*layer_idx*/)> on_select_target;
 
+    // Attach a replay scrub controller (optional). When set, the app shows
+    // scrub keybindings and handles p/s for pause/step.
+    void set_replay_control(ReplayControl* ctrl) { replay_ctrl_ = ctrl; }
+
 private:
     UiState&                  state_;
     ftxui::ScreenInteractive* screen_ = nullptr;  // valid only during run()
+    ReplayControl*            replay_ctrl_ = nullptr;
 
     // Focus: which of the 5 panes currently receives directional input.
     int  focus_ = 0;   // 0..4
