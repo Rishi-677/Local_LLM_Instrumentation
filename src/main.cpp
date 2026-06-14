@@ -30,6 +30,7 @@
 #include "export.hpp"
 #include "tui/ui_state.hpp"
 #include "tui/app.hpp"
+#include "sidecar/receiver.hpp"
 
 #include <array>
 #include <atomic>
@@ -58,6 +59,7 @@ struct Options {
     bool  bench          = false;// measure hook overhead (hooked vs baseline)
     std::string export_csv;      // headless: write per-layer summary CSV
     std::string export_json;     // headless: write per-layer summary JSON
+    std::string export_html;     // headless: write self-contained HTML report
     bool  help           = false;
 
     // Sourced from config (TOML) as a baseline, overridable on the CLI.
@@ -71,6 +73,11 @@ struct Options {
     // Per-OpClass capture mask, indexed by static_cast<int>(OpClass):
     // {Embed, Attn, MLP, Norm, Output, Other}.
     std::array<bool, 6> capture_mask = {true, true, true, true, true, true};
+
+    // Sidecar (PyTorch hook via loopback socket).
+    bool   sidecar        = false;
+    int    sidecar_port   = 9876;
+    std::string sidecar_host = "127.0.0.1";
 };
 
 void print_usage(std::FILE* f) {
@@ -93,8 +100,12 @@ void print_usage(std::FILE* f) {
         "  --headless               run to completion without the TUI (verify / CI)\n"
         "  --preview                render one TUI frame to stdout and exit\n"
         "  --bench                  measure hook overhead (hooked vs baseline) and exit\n"
-        "  --export-csv <file>      write a per-layer stats summary as CSV (headless)\n"
-        "  --export-json <file>     write a per-layer stats summary as JSON (headless)\n"
+        "  --sidecar                PyTorch sidecar mode (receive telemetry via socket)\n"
+        "  --sidecar-port <n>       sidecar listen port (default 9876)\n"
+        "  --sidecar-host <addr>    sidecar listen address (default 127.0.0.1)\n"
+          "  --export-csv <file>      write a per-layer stats summary as CSV (headless)\n"
+          "  --export-json <file>     write a per-layer stats summary as JSON (headless)\n"
+          "  --export-html <file>     write a self-contained HTML report (headless)\n"
         "  -h, --help               show this help\n");
 }
 
@@ -120,9 +131,13 @@ void apply_cli(int argc, char** argv, Options& o) {
         else if (a == "--headless")          o.headless = true;
         else if (a == "--preview")           o.preview = true;
         else if (a == "--preview-filter")    { o.preview = true; o.preview_filter = next("--preview-filter"); }
+        else if (a == "--sidecar")           o.sidecar = true;
+        else if (a == "--sidecar-port")      o.sidecar_port = std::atoi(next("--sidecar-port").c_str());
+        else if (a == "--sidecar-host")      o.sidecar_host = next("--sidecar-host");
         else if (a == "--bench")             o.bench = true;
         else if (a == "--export-csv")        { o.headless = true; o.export_csv = next("--export-csv"); }
         else if (a == "--export-json")       { o.headless = true; o.export_json = next("--export-json"); }
+        else if (a == "--export-html")       { o.headless = true; o.export_html = next("--export-html"); }
         else if (a == "-h" || a == "--help") o.help = true;
         else                                 pos.push_back(a);
     }
@@ -143,6 +158,9 @@ void seed_from_config(Options& o, const ts::Config& c) {
     o.stats_sample      = c.stats_sample;
     o.capture_mask = { c.capture_embed, c.capture_attn, c.capture_mlp,
                        c.capture_norm, /*Output*/ true, c.capture_other };
+    o.sidecar        = c.sidecar_enabled;
+    o.sidecar_port   = c.sidecar_port;
+    o.sidecar_host   = c.sidecar_host;
 }
 
 // Redirect llama.cpp's verbose loader logging away from the TUI screen.
@@ -295,19 +313,56 @@ static void inference_loop(const Options& opt,
 }
 
 // ---------------------------------------------------------------------------
+// Sidecar producer: receive telemetry from a Python PyTorch sidecar via TCP.
+// ---------------------------------------------------------------------------
+static void sidecar_loop(const Options& opt,
+                          ts::EventRing& ring,
+                          ts::AttentionSink* attn_sink,
+                          std::atomic<bool>& alive,
+                          std::atomic<bool>& done) {
+    ts::SidecarReceiver::Config cfg;
+    cfg.host = opt.sidecar_host;
+    cfg.port = opt.sidecar_port;
+
+    ts::SidecarReceiver receiver(ring, cfg);
+    if (attn_sink) receiver.set_attention_sink(*attn_sink);
+    receiver.run(alive);
+
+    done.store(true, std::memory_order_release);
+}
+
+// ---------------------------------------------------------------------------
 // Replay producer: feed a recorded session through the ring.
 // ---------------------------------------------------------------------------
 static void replay_loop(const Options& opt,
-                        ts::EventRing& ring,
-                        ts::UiState& ui,
-                        std::atomic<bool>& alive,
-                        std::atomic<bool>& done) {
+                         ts::EventRing& ring,
+                         ts::UiState& ui,
+                         ts::ReplayControl* ctrl,
+                         std::atomic<bool>& alive,
+                         std::atomic<bool>& done) {
     DoneGuard guard{done};
     ts::Replay r(opt.replay);
     if (!r.ok()) { ui.set_session_state("REPLAY OPEN FAILED"); return; }
 
     ts::TensorEvent ev;
     while (alive.load(std::memory_order_acquire) && r.next(ev)) {
+        // Pause check: busy-wait until unpaused or a step is requested.
+        if (ctrl) {
+            for (;;) {
+                if (!alive.load(std::memory_order_acquire)) return;
+                if (!ctrl->paused.load(std::memory_order_acquire)) break;
+                int step = ctrl->step_request.exchange(0, std::memory_order_acq_rel);
+                if (step > 0) {
+                    ui.set_session_state("REPLAY (STEP)");
+                    break;
+                }
+                ui.set_session_state("REPLAY PAUSED");
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            }
+        } else {
+            ui.set_session_state("REPLAY");
+        }
+
         while (!ring.push(ev) && alive.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1)); // backpressure
         }
@@ -434,15 +489,16 @@ int main(int argc, char** argv) {
     spdlog::info("Local_LLM_Instrumentation starting (theme={}, ring_capacity={})",
                  cfg.theme, opt.ring_capacity);
 
-    const bool replay_mode = !opt.replay.empty();
-    if (opt.model.empty() && !replay_mode) {
+    const bool replay_mode  = !opt.replay.empty();
+    const bool sidecar_mode = opt.sidecar;
+    if (opt.model.empty() && !replay_mode && !sidecar_mode) {
         print_usage(stderr);
         return 1;
     }
 
     // Pre-flight: fail fast with a clear message if the model file is missing,
     // rather than surfacing it as a "LOAD FAILED" badge inside the TUI.
-    if (!replay_mode) {
+    if (!replay_mode && !sidecar_mode) {
         if (std::FILE* f = std::fopen(opt.model.c_str(), "rb")) {
             std::fclose(f);
         } else {
@@ -452,6 +508,100 @@ int main(int argc, char** argv) {
     }
 
     if (opt.bench) return run_bench(opt);
+
+    // Sidecar mode doesn't need llama/ggml init.
+    if (sidecar_mode) {
+        ts::EventRing ring(opt.ring_capacity);
+        ts::UiState   ui;
+        ts::Topology  topo;
+        ts::AttentionSink attn_sink;
+        ts::AnomalyDetector detector(
+            ts::AnomalyDetector::Config{opt.anomaly_thresh, opt.flag_cpu_fallback});
+
+        std::unique_ptr<ts::Recorder> recorder;
+        if (!opt.record.empty()) {
+            recorder = std::make_unique<ts::Recorder>(opt.record);
+            if (!recorder->ok()) {
+                std::fprintf(stderr, "warning: could not open record file '%s'\n", opt.record.c_str());
+                recorder.reset();
+            }
+        }
+
+        ui.set_model_name("pytorch-sidecar");
+        ui.set_session_state("SIDECAR");
+
+        std::atomic<bool> alive{true};
+        std::atomic<bool> producer_done{false};
+        std::atomic<int>  target_layer{opt.attn_layer};
+        std::atomic<int>  pending_select{-2};
+
+        auto go = [&]() { sidecar_loop(opt, std::ref(ring), &attn_sink, std::ref(alive), std::ref(producer_done)); };
+        std::thread producer(go);
+
+        if (opt.headless) {
+            ts::Summary summary;
+            const bool want_summary = !opt.export_csv.empty() || !opt.export_json.empty() || !opt.export_html.empty();
+            ts::TensorEvent ev;
+            uint64_t total = 0;
+            bool got_attention = false;
+            int att_rows = 0, att_cols = 0;
+            while (!producer_done.load(std::memory_order_acquire) || ring.size_approx() > 0) {
+                while (ring.pop(ev)) {
+                    ++total;
+                    topo.update(ev);
+                    if (auto a = detector.inspect(ev)) {}
+                    if (recorder) recorder->write(ev);
+                    if (want_summary) summary.add(ev);
+                }
+                ts::AttentionPayload ap;
+                if (attn_sink.take(ap)) { got_attention = true; att_rows = ap.rows; att_cols = ap.cols; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            producer.join();
+            std::printf("Local_LLM_Instrumentation sidecar run complete.\n");
+            std::printf("  events received : %llu\n", (unsigned long long)total);
+            std::printf("  events dropped  : %zu\n", ring.dropped());
+            if (got_attention) std::printf("  attention captured : yes (%dx%d)\n", att_rows, att_cols);
+            else               std::printf("  attention captured : no\n");
+            if (recorder) { recorder->close(); std::printf("  recorded to         : %s\n", opt.record.c_str()); }
+            if (!opt.export_csv.empty()) {
+                bool ok = summary.write_csv(opt.export_csv);
+                std::printf("  exported CSV       : %s (%zu rows)%s\n", opt.export_csv.c_str(),
+                            summary.rows(), ok ? "" : " [FAILED]");
+            }
+            if (!opt.export_json.empty()) {
+                bool ok = summary.write_json(opt.export_json);
+                std::printf("  exported JSON      : %s (%zu rows)%s\n", opt.export_json.c_str(),
+                            summary.rows(), ok ? "" : " [FAILED]");
+            }
+            if (!opt.export_html.empty()) {
+                bool ok = summary.write_html(opt.export_html);
+                std::printf("  exported HTML      : %s (%zu rows)%s\n", opt.export_html.c_str(),
+                            summary.rows(), ok ? "" : " [FAILED]");
+            }
+            return 0;
+        }
+
+        ts::App app(ui);
+        app.on_select_target = [&](int row) {
+            auto snap = ui.snapshot();
+            if (row >= 0 && row < (int)snap.topology.size()) {
+                pending_select.store(snap.topology[row].layer_idx, std::memory_order_release);
+            }
+        };
+
+        std::thread consumer(consumer_loop, std::ref(ring), std::ref(ui), &app,
+                             std::ref(topo), std::ref(detector), nullptr,
+                             std::ref(attn_sink), std::ref(target_layer),
+                             std::ref(pending_select), std::ref(alive));
+
+        ts::panic::TerminalClaim terminal_claim;
+        int rc = app.run();
+        alive.store(false, std::memory_order_release);
+        if (producer.joinable()) producer.join();
+        if (consumer.joinable()) consumer.join();
+        return rc;
+    }
 
     llama_log_set(quiet_log, nullptr);
     llama_backend_init();
@@ -480,6 +630,8 @@ int main(int argc, char** argv) {
     attn_sink.target_layer.store(opt.attn_layer, std::memory_order_release);
     attn_sink.target_head.store(opt.attn_head, std::memory_order_release);
 
+    ts::ReplayControl replay_ctrl;
+
     std::atomic<bool> alive{true};
     std::atomic<bool> producer_done{false};
     std::atomic<int>  target_layer{opt.attn_layer};
@@ -488,7 +640,7 @@ int main(int argc, char** argv) {
     auto start_producer = [&]() {
         if (replay_mode) {
             return std::thread(replay_loop, std::cref(opt), std::ref(ring), std::ref(ui),
-                               std::ref(alive), std::ref(producer_done));
+                               &replay_ctrl, std::ref(alive), std::ref(producer_done));
         }
         return std::thread(inference_loop, std::cref(opt), std::ref(ring), std::ref(ui),
                            &attn_sink, std::ref(alive), std::ref(producer_done));
@@ -502,7 +654,7 @@ int main(int argc, char** argv) {
         bool got_attention = false;
         int  att_rows = 0, att_cols = 0;
         ts::Summary summary;
-        const bool want_summary = !opt.export_csv.empty() || !opt.export_json.empty();
+        const bool want_summary = !opt.export_csv.empty() || !opt.export_json.empty() || !opt.export_html.empty();
         ts::TensorEvent ev;
         while (!producer_done.load(std::memory_order_acquire) || ring.size_approx() > 0) {
             while (ring.pop(ev)) {
@@ -537,6 +689,11 @@ int main(int argc, char** argv) {
             std::printf("  exported JSON       : %s (%zu rows)%s\n", opt.export_json.c_str(),
                         summary.rows(), ok ? "" : " [FAILED]");
         }
+        if (!opt.export_html.empty()) {
+            bool ok = summary.write_html(opt.export_html);
+            std::printf("  exported HTML       : %s (%zu rows)%s\n", opt.export_html.c_str(),
+                        summary.rows(), ok ? "" : " [FAILED]");
+        }
         llama_backend_free();
         return 0;
     }
@@ -563,6 +720,7 @@ int main(int argc, char** argv) {
         ui.set_session_state("LIVE");
 
         ts::App app(ui);
+        if (replay_mode) app.set_replay_control(&replay_ctrl);
         if (!opt.preview_filter.empty()) app.set_stream_filter(opt.preview_filter);
         std::string frame = app.preview(150, 46);
         std::fwrite(frame.data(), 1, frame.size(), stdout);
@@ -574,6 +732,7 @@ int main(int argc, char** argv) {
 
     // ---- Interactive mode: TUI on the main thread ---------------------------
     ts::App app(ui);
+    if (replay_mode) app.set_replay_control(&replay_ctrl);
 
     // Space on a topology row → resolve that row's layer_idx from the snapshot
     // and hand it to the consumer (which owns Topology, single-threaded).
