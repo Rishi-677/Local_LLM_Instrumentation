@@ -63,20 +63,20 @@ Hook llama.cpp's built-in `ggml_backend_sched_eval_callback` (`cb_eval`) to obse
 
 ## Phase 7 — Export (partial)
 
-- [x] Per-layer stats summary → CSV / JSON (`src/export.hpp`, `--export-csv/--export-json`).
-- [ ] HTML self-contained report with embedded SVG flamegraph.
+- [x] Per-layer stats summary → CSV / JSON / HTML (`src/export.hpp`, `--export-csv/--export-json/--export-html`).
+- [x] HTML self-contained report with embedded SVG flamegraph.
 
 ## Backlog — next candidates
 
 - [x] **Latency flamegraph panel** (Phase 5) — ASCII bars per layer sorted by compute time (export data already supports it).
 - [x] **Crash/panic handler** (Phase 3) — restore the terminal on signal/exception.
-- [ ] **Replay scrubber** (Phase 6) — step / pause / speed over a recorded session.
-- [ ] **Mask-in-`ask` overhead cut** — return false in the cb_eval ask phase for masked classes so they skip the callback entirely.
+- [x] **Replay scrubber** (Phase 6) — step / pause / speed over a recorded session.
+- [x] **Mask-in-`ask` overhead cut** — return false in the cb_eval ask phase for masked classes so they skip the callback entirely.
 
-## Phase 5 — Platform (post-MVP, not built now)
+## Phase 5 — Platform (post-MVP)
 
-- [ ] PyTorch sidecar (`register_forward_hook` + `output_attentions` → FlatBuffers over loopback socket → same TUI).
-- [ ] TF/Keras adapter; FlatBuffers `.llmtrace` sessions; packaging.
+- [x] PyTorch sidecar (`register_forward_hook` + `output_attentions` → NDJSON over loopback TCP socket → same TUI).
+- [x] TF/Keras adapter; `.llmtrace` sessions; packaging.
 
 ---
 
@@ -104,6 +104,10 @@ src/
     pane_anomaly.cpp
   session/
     recorder.cpp / replay.cpp   # NDJSON record + replay
+  sidecar/
+    receiver.cpp / receiver.hpp # TCP socket receiver for PyTorch sidecar
+py_sidecar/
+  sidecar.py                    # PyTorch forward hooks + NDJSON socket output
 ```
 
 ## Risks / constraints
@@ -123,3 +127,4 @@ src/
 5. Crafted anomaly case is flagged with timestamp + severity.
 6. Record to NDJSON, replay into the same TUI, panes match.
 7. Hooked vs un-hooked tokens/sec shows bounded overhead; drop counter behaves under load.
+8. Sidecar mode: start C++ with `--sidecar --headless`, run `py_sidecar/sidecar.py` with `--output-attentions`; events flow over TCP, attention heatmap populates.
