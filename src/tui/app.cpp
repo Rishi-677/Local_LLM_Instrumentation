@@ -336,6 +336,7 @@ Element render_attention(const UiState::Snapshot& s, int pan_row, int pan_col,
         hbox({keycap("h/j/k/l"), text(" Pan matrix") | color(C_TEXT)}),
         hbox({keycap("+/-"),     text(" Weight contrast") | color(C_TEXT)}),
         hbox({keycap("f"),       text(" Fit / reset view") | color(C_TEXT)}),
+        hbox({keycap("F"),       text(" Toggle fullscreen") | color(C_TEXT)}),
     });
 
     return hbox({
@@ -467,7 +468,7 @@ Element render_ledger(const UiState::Snapshot& s) {
 // the live render loop and the headless preview path.
 Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
                     int pan_col, float contrast, const std::string& filter,
-                    bool filter_editing) {
+                    bool filter_editing, bool att_fullscreen) {
     Color state_col = (s.session_state == "LIVE") ? C_AQUA : C_ORANGE;
 
     // Model basename only (drop path + extension), capped, to keep the header tight.
@@ -499,12 +500,23 @@ Element build_frame(const UiState::Snapshot& s, int focus, int pan_row,
             bgcolor(state_col),
     });
 
+    Element attention = pane(3, "ATTENTION MATRIX VISUALIZER", focus == P_ATTENTION,
+                             render_attention(s, pan_row, pan_col, contrast));
+
+    // Fullscreen drill-down: the attention pane fills the screen under the
+    // header. Triggered by F in the attention pane; Tab/F return to the grid.
+    if (att_fullscreen) {
+        return vbox({
+            header,
+            separator() | color(C_BORDER),
+            attention | flex,
+        });
+    }
+
     Element topo = pane(1, "MODEL TOPOLOGY", focus == P_TOPOLOGY,
                         render_topology(s, focus == P_TOPOLOGY));
     Element stream = pane(2, "LIVE PACKET STREAM", focus == P_STREAM,
                           render_stream(s, filter, filter_editing));
-    Element attention = pane(3, "ATTENTION MATRIX VISUALIZER", focus == P_ATTENTION,
-                             render_attention(s, pan_row, pan_col, contrast));
     Element metrics = pane(4, "RUNTIME METRICS INSPECTOR", focus == P_METRICS,
                            render_metrics(s));
     Element flame = pane(5, "LATENCY FLAMEGRAPH", focus == P_FLAME,
@@ -538,7 +550,7 @@ void App::request_redraw() {
 std::string App::preview(int width, int height) {
     Element doc = build_frame(state_.snapshot(), focus_, att_pan_row_,
                               att_pan_col_, att_contrast_, stream_filter_,
-                              filter_editing_);
+                              filter_editing_, att_fullscreen_);
     auto screen = Screen::Create(Dimension::Fixed(width), Dimension::Fixed(height));
     Render(screen, doc);
     return screen.ToString();
@@ -552,7 +564,7 @@ int App::run() {
     auto dashboard = Renderer([this] {
         return build_frame(state_.snapshot(), focus_, att_pan_row_,
                            att_pan_col_, att_contrast_, stream_filter_,
-                           filter_editing_);
+                           filter_editing_, att_fullscreen_);
     });
 
     // Global + routed key handling.
@@ -583,10 +595,12 @@ int App::run() {
         }
         if (e == Event::Tab) {
             focus_ = (focus_ + 1) % P_COUNT;
+            att_fullscreen_ = false;  // leaving attention exits fullscreen
             return true;
         }
         if (e == Event::TabReverse) {
             focus_ = (focus_ + P_COUNT - 1) % P_COUNT;
+            att_fullscreen_ = false;
             return true;
         }
 
@@ -637,7 +651,11 @@ int App::run() {
                 att_contrast_ = std::max(0.1f, att_contrast_ / 1.25f);
                 return true;
             }
-            if (e == Event::F || e == Event::f) {
+            if (e == Event::F) {
+                att_fullscreen_ = !att_fullscreen_;
+                return true;
+            }
+            if (e == Event::f) {
                 // Fit: reset pan + contrast.
                 att_pan_row_ = 0;
                 att_pan_col_ = 0;

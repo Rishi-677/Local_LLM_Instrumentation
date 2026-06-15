@@ -402,8 +402,10 @@ def main() -> int:
         pad_token_id=tokenizer.pad_token_id,
     )
 
-    # Signal completion.
-    done = json.dumps({"type": "done", "tokens": output.shape[1]}) + "\n"
+    # Signal completion. generate() returns a plain tensor, or a ModelOutput
+    # (whose tokens live in .sequences) when attention/return-dict options are set.
+    seq = getattr(output, "sequences", output)
+    done = json.dumps({"type": "done", "tokens": int(seq.shape[1])}) + "\n"
     with send_lock:
         sock.sendall(done.encode("utf-8"))
 

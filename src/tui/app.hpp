@@ -5,7 +5,8 @@
 //   - Tab            cycle focus between the 5 panes
 //   - j / k          move topology selection (when topology pane focused)
 //   - space          set the current layer as capture target (on_select_target)
-//   - h/j/k/l + - F  pan / contrast / fit the attention heatmap (when focused)
+//   - h/j/k/l + -    pan / contrast the attention heatmap (when focused)
+//   - f / F          fit-reset / toggle-fullscreen the attention heatmap
 //   - q / Q          quit
 //
 // Cross-thread refresh: the lead's consumer thread calls `request_redraw()`
@@ -62,9 +63,10 @@ private:
     int  focus_ = 0;   // 0..4
 
     // Attention pane local view state (not shared — purely presentation).
-    int   att_pan_row_  = 0;
-    int   att_pan_col_  = 0;
-    float att_contrast_ = 1.0f;
+    int   att_pan_row_    = 0;
+    int   att_pan_col_    = 0;
+    float att_contrast_   = 1.0f;
+    bool  att_fullscreen_ = false;  // F: attention fills the screen
 
     // Live packet-stream filter ('/' to edit; matches layer type / op / device).
     std::string stream_filter_;

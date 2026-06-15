@@ -26,7 +26,7 @@ Hook llama.cpp's built-in `ggml_backend_sched_eval_callback` (`cb_eval`) to obse
 
 ## Phase 0 — Scaffolding
 
-- [x] **C0 · Build skeleton.** `CMakeLists.txt` vendoring `llama.cpp` + `FTXUI` via CMake `FetchContent`. Hello-world that loads a small GGUF and decodes one token. Verify it builds on Windows 11 / MSVC.
+- [x] **C0 · Build skeleton.** `CMakeLists.txt` vendoring `llama.cpp` + `FTXUI` via CMake `FetchContent`. Hello-world that loads a small GGUF and decodes one token. Verify it builds on Windows 11 (MinGW-w64 / GCC + Ninja; the static link uses `-fopenmp -static`). Linux/GCC also builds in CI.
 - [x] **C1 · Core schema** — `src/event.hpp`. `TensorEvent` { id, timestamp, layer_idx, node_name, op_type, class (Embed/Attn/MLP/Norm/Other), device, shape[4], dtype, latency_us, min, max, mean, sparsity, has_nan, has_inf, payload handle } and `LayerNode` topology types. **This struct is the contract for everything downstream and the seam for a future sidecar.**
 - [x] **C2 · Ring buffer** — `src/ring_buffer.hpp`. Lock-free fixed-size SPSC queue of `TensorEvent` + dropped-count. Single producer = callback, single consumer = TUI.
 
@@ -57,7 +57,7 @@ Hook llama.cpp's built-in `ggml_backend_sched_eval_callback` (`cb_eval`) to obse
 ## Phase 0 — Foundation infrastructure  ✅ done
 
 - [x] Core data model split: `TensorMeta` / `ActivationStats` / `LayerEvent` (`src/event.hpp`).
-- [x] Typed event bus with subscribe/publish + priority (`src/event_bus.hpp`).
+- [x] Typed event bus with subscribe/publish + priority (`src/event_bus.hpp`). *Reserved infrastructure — built + unit-tested but not yet wired into the pipeline; the live path is callback → ring → snapshot, and the sidecar pushes onto the same ring.*
 - [x] TOML config loader via toml++ (`src/config.*`, `local_llm_instrumentation.toml`) — buffer size, capture mask, anomaly, attention, theme.
 - [x] spdlog file logging; CMake ASAN/UBSAN/TSAN presets; clang-format/clang-tidy; Catch2 tests (24); GitHub Actions CI.
 

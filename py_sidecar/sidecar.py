@@ -12,11 +12,17 @@ Usage:
 
 import argparse
 import json
+import os
 import socket
 import sys
 import time
 import warnings
 from typing import Optional
+
+# This is the PyTorch sidecar — pin transformers to the torch backend so it
+# never auto-imports a (possibly broken) TensorFlow/Flax install at import time.
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_FLAX", "0")
 
 import numpy as np
 import torch
@@ -414,8 +420,11 @@ def main() -> int:
             pad_token_id=tokenizer.pad_token_id,
         )
 
-    # Signal completion.
-    done = json.dumps({"type": "done", "tokens": generated.shape[1]}) + "\n"
+    # Signal completion. generate() returns a plain tensor, or a
+    # GenerateDecoderOnlyOutput (whose tokens live in .sequences) when
+    # return-dict/attention options promote the result to a ModelOutput.
+    seq = getattr(generated, "sequences", generated)
+    done = json.dumps({"type": "done", "tokens": int(seq.shape[1])}) + "\n"
     with send_lock:
         sock.sendall(done.encode("utf-8"))
 

@@ -19,6 +19,12 @@
 // Re-entrancy / deadlock safety: user handlers may subscribe, unsubscribe, or
 // publish from inside a handler. So we NEVER hold the mutex while invoking a
 // handler — we snapshot the handler list under the lock, release it, then call.
+//
+// STATUS: reserved infrastructure — NOT yet wired into the pipeline. The current
+// data path is callback → SPSC ring → per-frame UiState snapshot, and the
+// sidecar receiver pushes straight onto the same ring, so no control-plane bus
+// is needed today. This unit is kept (with its unit tests) as the seam for
+// future control-plane signalling; it is intentionally unreferenced by main.
 
 #pragma once
 

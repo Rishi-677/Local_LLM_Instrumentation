@@ -75,7 +75,8 @@ self-contained.
 ```
 
 In the TUI: `Tab` cycles panes, `j/k` + `Space` pick a capture target, `h/j/k/l`
-+ `+/-` pan/contrast the attention heatmap, `/` filters the packet stream, `q` quits.
++ `+/-` pan/contrast the attention heatmap, `f` fits / `F` toggles attention
+fullscreen, `/` filters the packet stream, `q` quits.
 
 Key options: `--config <file>`, `--max-tokens N`, `--delay-ms N`, `--ring-capacity N`,
 `--anomaly-threshold X`, `--no-flash-attn` (default — needed for the attention matrix),

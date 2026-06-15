@@ -12,8 +12,11 @@ import subprocess
 import sys
 import time
 
-BINARY = os.path.join(os.path.dirname(__file__), "..", "build",
-                      "local_llm_instrumentation.exe")
+# Windows builds produce a .exe; POSIX builds have no extension.
+_BINARY_BASE = os.path.join(os.path.dirname(__file__), "..", "build",
+                            "local_llm_instrumentation")
+BINARY = _BINARY_BASE + ".exe" if os.path.exists(_BINARY_BASE + ".exe") \
+    else _BINARY_BASE
 SIDECAR = os.path.join(os.path.dirname(__file__), "..", "py_sidecar",
                        "sidecar.py")
 MODEL = "hf-internal-testing/tiny-random-gpt2"
