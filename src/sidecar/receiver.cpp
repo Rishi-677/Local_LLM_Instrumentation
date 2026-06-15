@@ -218,11 +218,9 @@ bool SidecarReceiver::extract_attention(const std::string& line, const TensorEve
     size_t idx = p;
     if (!parse_float_array(line, idx, ap.weights))
         return false;
-
     // Validate the flattened size matches rows * cols.
     if ((int)ap.weights.size() != ap.rows * ap.cols)
         return false;
-
     out = ap;
     return true;
 }
