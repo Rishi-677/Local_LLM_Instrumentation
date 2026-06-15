@@ -17,25 +17,20 @@ import sys
 import time
 import warnings
 from typing import Callable, Optional
-
+import tensorflow as tf # type: ignore
+from tensorflow import Tensor # type: ignore
 import numpy as np
 
-# ---------------------------------------------------------------------------
 # Optional TF imports (deferred so help works without TF installed)
-# ---------------------------------------------------------------------------
-tf: Optional[object] = None
 
 def _import_tf():
     global tf
-    import tensorflow._api.v2.compat.v1 as tf_v1
+    import tensorflow._api.v2.compat.v1 as tf_v1 # type: ignore
     tf = tf_v1
     tf.disable_eager_execution()
 
 
-# ---------------------------------------------------------------------------
 # Tensor-level helpers
-# ---------------------------------------------------------------------------
-
 DTYPE_MAP: dict[str, int] = {
     "float32": 0,
     "float16": 1,
@@ -47,15 +42,15 @@ DTYPE_MAP: dict[str, int] = {
 }
 
 
-def dtype_code(t: "tf.Tensor") -> int:
+def dtype_code(t: "Tensor") -> int:
     return DTYPE_MAP.get(t.dtype.name, 0)
 
 
-def dtype_size(t: "tf.Tensor") -> int:
+def dtype_size(t: "Tensor") -> int:
     return t.dtype.size
 
 
-def shape_arr(t: "tf.Tensor") -> list[int]:
+def shape_arr(t: "Tensor") -> list[int]:
     s = list(t.shape)
     while len(s) < 4:
         s.append(0)
@@ -98,26 +93,20 @@ def compute_stats(values: np.ndarray) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Layer classification (mirrors src/capture/topology.cpp classify())
-# ---------------------------------------------------------------------------
 
 def classify_name(name: str) -> tuple[int, int]:
     name_lower = name.lower()
     cls = 5  # Other
     if any(k in name_lower for k in ("embed", "embd", "wpe", "wte")):
         cls = 0
-    elif any(k in name_lower for k in ("attn", "kqv", "self_attn",
-                                        "q_proj", "k_proj", "v_proj", "o_proj",
-                                        "attention")):
+    elif any(k in name_lower for k in ("attn", "kqv", "self_attn", "q_proj", "k_proj", "v_proj", "o_proj", "attention")):
         cls = 1
-    elif any(k in name_lower for k in ("mlp", "ffn", "gate_proj", "up_proj",
-                                        "down_proj", "fc", "dense")):
+    elif any(k in name_lower for k in ("mlp", "ffn", "gate_proj", "up_proj", "down_proj", "fc", "dense")):
         cls = 2
     elif "norm" in name_lower or "layernorm" in name_lower:
         cls = 3
-    elif any(k in name_lower for k in ("logits", "lm_head", "embed_out",
-                                        "output", "classifier")):
+    elif any(k in name_lower for k in ("logits", "lm_head", "embed_out", "output", "classifier")):
         cls = 4
     layer = -1
     for sep in ('.', '-'):
@@ -130,15 +119,9 @@ def classify_name(name: str) -> tuple[int, int]:
     return cls, layer
 
 
-# ---------------------------------------------------------------------------
 # Forward call wrapper
-# ---------------------------------------------------------------------------
-
 _counter: int = 0
-
-
-def make_wrapper(layer_name: str, layer: "tf.keras.layers.Layer",
-                 original_call: Callable, sock: socket.socket, send_lock):
+def make_wrapper(layer_name: str, layer: "keras.layers.Layer", original_call: Callable, sock: socket.socket, send_lock): # type: ignore
     """Wrap *layer.call* to emit telemetry after each forward."""
     global _counter
 
@@ -221,13 +204,9 @@ def make_wrapper(layer_name: str, layer: "tf.keras.layers.Layer",
     return wrapped_call
 
 
-# ---------------------------------------------------------------------------
 # Model instrumentation
-# ---------------------------------------------------------------------------
 
-def instrument_model(model: "tf.keras.Model", sock: socket.socket, send_lock,
-                     skip_patterns: tuple = ("dropout", "activation",
-                                              "activity_regularizer")) -> int:
+def instrument_model(model: "tf.keras.Model", sock: socket.socket, send_lock, skip_patterns: tuple = ("dropout", "activation", "activity_regularizer")) -> int: # type: ignore
     count = 0
     for layer in model.submodules:
         name = layer.name
@@ -243,12 +222,9 @@ def instrument_model(model: "tf.keras.Model", sock: socket.socket, send_lock,
     return count
 
 
-# ---------------------------------------------------------------------------
 # Attention capture
-# ---------------------------------------------------------------------------
 
-def maybe_hook_attention(model: "tf.keras.Model", sock: socket.socket,
-                         send_lock) -> int:
+def maybe_hook_attention(model: "tf.keras.Model", sock: socket.socket, send_lock) -> int: # type: ignore
     count = 0
     for layer in model.submodules:
         name = layer.name
@@ -263,8 +239,7 @@ def maybe_hook_attention(model: "tf.keras.Model", sock: socket.socket,
     return count
 
 
-def _make_attention_wrapper(layer_name: str, layer: "tf.keras.layers.Layer",
-                            original_call: Callable, sock: socket.socket, send_lock):
+def _make_attention_wrapper(layer_name: str, layer: "tf.keras.layers.Layer", original_call: Callable, sock: socket.socket, send_lock): # type: ignore
     def wrapped(inputs, *args, **kwargs):
         output = original_call(inputs, *args, **kwargs)
         # Some TF models return (output, attention) or (output, states, attention)
@@ -326,25 +301,16 @@ def _make_attention_wrapper(layer_name: str, layer: "tf.keras.layers.Layer",
     return wrapped
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Local_LLM_Instrumentation TensorFlow/Keras sidecar")
-    p.add_argument("--model", type=str, required=True,
-                   help="HuggingFace TF model name or path")
-    p.add_argument("--port", type=int, default=9876,
-                   help="TCP port to connect to (C++ receiver)")
-    p.add_argument("--host", type=str, default="127.0.0.1",
-                   help="Host to connect to")
-    p.add_argument("--prompt", type=str, default="The quick brown fox",
-                   help="Input prompt")
-    p.add_argument("--max-tokens", type=int, default=32,
-                   help="Max tokens to generate")
-    p.add_argument("--output-attentions", action="store_true",
-                   help="Capture attention matrices")
+    p = argparse.ArgumentParser(description="Local_LLM_Instrumentation TensorFlow/Keras sidecar")
+    p.add_argument("--model", type=str, required=True, help="HuggingFace TF model name or path")
+    p.add_argument("--port", type=int, default=9876, help="TCP port to connect to (C++ receiver)")
+    p.add_argument("--host", type=str, default="127.0.0.1", help="Host to connect to")
+    p.add_argument("--prompt", type=str, default="The quick brown fox", help="Input prompt")
+    p.add_argument("--max-tokens", type=int, default=32, help="Max tokens to generate")
+    p.add_argument("--output-attentions", action="store_true", help="Capture attention matrices")
     return p.parse_args()
 
 
@@ -353,7 +319,7 @@ def main() -> int:
 
     _import_tf()
 
-    print(f"TF Keras sidecar connecting to {args.host}:{args.port} ...")
+    print(f"TF Keras sidecar connecting to {args.host}:{args.port} ")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(30.0)
     try:
@@ -368,11 +334,7 @@ def main() -> int:
     # Load model and tokenizer.
     print(f"Loading model {args.model} ...")
     from transformers import TFAutoModelForCausalLM, AutoTokenizer
-    model = TFAutoModelForCausalLM.from_pretrained(
-        args.model,
-        output_attentions=args.output_attentions,
-        trust_remote_code=True,
-    )
+    model = TFAutoModelForCausalLM.from_pretrained(args.model, output_attentions=args.output_attentions, trust_remote_code=True,)
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -386,21 +348,14 @@ def main() -> int:
         print(f"Hooked {attn_count} attention containers")
 
     # Signal readiness.
-    ready = json.dumps({"type": "ready", "model": args.model,
-                        "hooks": n_hooks}) + "\n"
+    ready = json.dumps({"type": "ready", "model": args.model, "hooks": n_hooks}) + "\n"
     with send_lock:
         sock.sendall(ready.encode("utf-8"))
 
     # Run inference.
     inputs = tokenizer(args.prompt, return_tensors="tf")
     print(f"Generating up to {args.max_tokens} tokens ...")
-    output = model.generate(
-        **inputs,
-        max_new_tokens=args.max_tokens,
-        do_sample=False,
-        output_attentions=args.output_attentions,
-        pad_token_id=tokenizer.pad_token_id,
-    )
+    output = model.generate(**inputs, max_new_tokens=args.max_tokens, do_sample=False, output_attentions=args.output_attentions, pad_token_id=tokenizer.pad_token_id,)
 
     # Signal completion. generate() returns a plain tensor, or a ModelOutput
     # (whose tokens live in .sequences) when attention/return-dict options are set.
