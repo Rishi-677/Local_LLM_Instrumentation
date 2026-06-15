@@ -3,7 +3,7 @@
 ## Clone
 
 ```sh
-git clone https://github.com/anomalyco/Local_LLM_Instrumentation.git
+git clone https://github.com/Rishi-677/Local_LLM_Instrumentation.git
 cd Local_LLM_Instrumentation
 ```
 
