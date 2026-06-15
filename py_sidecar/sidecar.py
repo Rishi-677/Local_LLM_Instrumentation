@@ -28,29 +28,25 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# ---------------------------------------------------------------------------
 # Tensor-level helpers
-# ---------------------------------------------------------------------------
 
 # Maps torch dtype to a simple integer matching ggml_type conventions.
 DTYPE_MAP: dict[torch.dtype, int] = {
-    torch.float32: 0,   # GGML_TYPE_F32
-    torch.float16: 1,   # GGML_TYPE_F16
+    torch.float32: 0, # GGML_TYPE_F32
+    torch.float16: 1, # GGML_TYPE_F16
     torch.bfloat16: 30, # GGML_TYPE_BF16
-    torch.int8:     24, # GGML_TYPE_I8
-    torch.int16:    25, # GGML_TYPE_I16
-    torch.int32:    26, # GGML_TYPE_I32
-    torch.int64:    26, # I32 — closest match
+    torch.int8: 24, # GGML_TYPE_I8
+    torch.int16: 25, # GGML_TYPE_I16
+    torch.int32: 26, # GGML_TYPE_I32
+    torch.int64: 26, # I32 — closest match
 }
 
 
 def dtype_code(t: torch.Tensor) -> int:
     return DTYPE_MAP.get(t.dtype, 0)
 
-
 def dtype_size(t: torch.Tensor) -> int:
     return t.element_size()
-
 
 def shape_arr(t: torch.Tensor) -> list[int]:
     """Return shape padded to 4 dims (matching kMaxDims=4)."""
@@ -58,7 +54,6 @@ def shape_arr(t: torch.Tensor) -> list[int]:
     while len(s) < 4:
         s.append(0)
     return s[:4]
-
 
 def compute_stats(t: torch.Tensor) -> dict:
     """Lightweight numeric summary over a float tensor."""
@@ -97,11 +92,7 @@ def compute_stats(t: torch.Tensor) -> dict:
         "has_nan": has_nan, "has_inf": has_inf, "stats_valid": True,
     }
 
-
-# ---------------------------------------------------------------------------
 # Layer classification (mirrors src/capture/topology.cpp classify())
-# ---------------------------------------------------------------------------
-
 def classify_name(name: str) -> tuple[int, int]:
     """Return (op_class_id, layer_idx) matching ts::OpClass.
 
@@ -112,11 +103,9 @@ def classify_name(name: str) -> tuple[int, int]:
     cls = 5  # Other
     if any(k in name_lower for k in ("embed", "embd", "inp_tokens", "wpe", "wte")):
         cls = 0
-    elif any(k in name_lower for k in ("attn", "kqv", "kq", "wqkv", "self_attn",
-                                        "q_proj", "k_proj", "v_proj", "o_proj")):
+    elif any(k in name_lower for k in ("attn", "kqv", "kq", "wqkv", "self_attn", "q_proj", "k_proj", "v_proj", "o_proj")):
         cls = 1
-    elif any(k in name_lower for k in ("mlp", "ffn", "gate_proj", "up_proj",
-                                        "down_proj", "fc")):
+    elif any(k in name_lower for k in ("mlp", "ffn", "gate_proj", "up_proj", "down_proj", "fc")):
         cls = 2
     elif "norm" in name_lower:
         cls = 3
@@ -134,12 +123,8 @@ def classify_name(name: str) -> tuple[int, int]:
     return cls, layer
 
 
-# ---------------------------------------------------------------------------
 # Forward hook
-# ---------------------------------------------------------------------------
-
 _counter: int = 0
-
 
 def make_hook(module_name: str, sock: socket.socket, send_lock, output_attentions: bool = False):
     """Create a forward hook that sends telemetry for *module_name*."""
@@ -151,7 +136,6 @@ def make_hook(module_name: str, sock: socket.socket, send_lock, output_attention
         ev_id = _counter
         ts_ns = int(time.time_ns())
         cls_id, layer = classify_name(module_name)
-
         # Determine device.
         try:
             dev = next(_mod.parameters()).device
@@ -202,19 +186,11 @@ def make_hook(module_name: str, sock: socket.socket, send_lock, output_attention
                 sock.sendall(line.encode("utf-8"))
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
-
     return hook
 
-
-# ---------------------------------------------------------------------------
 # Model introspection — register hooks on all leaf modules
-# ---------------------------------------------------------------------------
-
-def instrument_model(model: nn.Module, sock: socket.socket, send_lock,
-                     skip_patterns: tuple = ("dropout", "activation"),
-                     output_attentions: bool = False) -> int:
+def instrument_model(model: nn.Module, sock: socket.socket, send_lock, skip_patterns: tuple = ("dropout", "activation"), output_attentions: bool = False) -> int:
     """Walk *model* and register a forward hook on every leaf nn.Module.
-
     Returns the number of hooks registered.
     """
     count = 0
@@ -230,11 +206,7 @@ def instrument_model(model: nn.Module, sock: socket.socket, send_lock,
         count += 1
     return count
 
-
-# ---------------------------------------------------------------------------
 # Attention capture helper
-# ---------------------------------------------------------------------------
-
 def maybe_hook_attention_output(model: nn.Module, sock: socket.socket, send_lock) -> int:
     """If the model supports output_attentions, hook the attention output."""
     cfg = getattr(model, "config", None)
@@ -246,19 +218,12 @@ def maybe_hook_attention_output(model: nn.Module, sock: socket.socket, send_lock
     # the last attention layer's output to capture the attention matrix.
     for name, mod in model.named_modules():
         name_lower = name.lower()
-        is_attn_container = (
-            "self_attn" in name_lower
-            or "attention" in name_lower
-            or name_lower.endswith(".attn")
-            or name_lower.endswith("self_attention")
-        )
+        is_attn_container = ("self_attn" in name_lower or "attention" in name_lower or name_lower.endswith(".attn") or name_lower.endswith("self_attention"))
         if not is_attn_container:
             continue
         if not list(mod.children()):
             continue
-        mod.register_forward_hook(
-            _make_attention_output_hook(name, sock, send_lock)
-        )
+        mod.register_forward_hook(_make_attention_output_hook(name, sock, send_lock))
         count += 1
     return count
 
@@ -310,32 +275,18 @@ def _make_attention_output_hook(module_name: str, sock: socket.socket, send_lock
                             pass
     return hook
 
-
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
-
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Local_LLM_Instrumentation PyTorch sidecar")
-    p.add_argument("--model", type=str, required=True,
-                   help="HuggingFace model name or path")
-    p.add_argument("--port", type=int, default=9876,
-                   help="TCP port to connect to (C++ receiver)")
-    p.add_argument("--host", type=str, default="127.0.0.1",
-                   help="Host to connect to")
-    p.add_argument("--prompt", type=str, default="The quick brown fox",
-                   help="Input prompt for inference")
-    p.add_argument("--max-tokens", type=int, default=32,
-                   help="Max tokens to generate")
-    p.add_argument("--device", type=str, default="auto",
-                   help="Device (cpu, cuda, mps, auto)")
-    p.add_argument("--output-attentions", action="store_true",
-                   help="Capture attention matrices")
-    p.add_argument("--dtype", type=str, default="auto",
-                   help="Model dtype (auto, float16, bfloat16, float32)")
+    p = argparse.ArgumentParser(description="Local_LLM_Instrumentation PyTorch sidecar")
+    p.add_argument("--model", type=str, required=True, help="HuggingFace model name or path")
+    p.add_argument("--port", type=int, default=9876, help="TCP port to connect to (C++ receiver)")
+    p.add_argument("--host", type=str, default="127.0.0.1", help="Host to connect to")
+    p.add_argument("--prompt", type=str, default="The quick brown fox", help="Input prompt for inference")
+    p.add_argument("--max-tokens", type=int, default=32, help="Max tokens to generate")
+    p.add_argument("--device", type=str, default="auto", help="Device (cpu, cuda, mps, auto)")
+    p.add_argument("--output-attentions", action="store_true", help="Capture attention matrices")
+    p.add_argument("--dtype", type=str, default="auto", help="Model dtype (auto, float16, bfloat16, float32)")
     return p.parse_args()
-
 
 def main() -> int:
     args = parse_args()
@@ -360,7 +311,7 @@ def main() -> int:
     }
     torch_dtype = dtype_map.get(args.dtype, "auto")
 
-    print(f"PyTorch sidecar connecting to {args.host}:{args.port} ...")
+    print(f"PyTorch sidecar connecting to {args.host}:{args.port} ")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(30.0)
     try:
@@ -373,15 +324,9 @@ def main() -> int:
     send_lock = __import__("threading").Lock()
 
     # Load model.
-    print(f"Loading model {args.model} on {device} ...")
+    print(f"Loading model {args.model} on {device} ")
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype=torch_dtype,
-        device_map=device if device == "auto" else None,
-        output_attentions=args.output_attentions,
-        trust_remote_code=True,
-    )
+    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch_dtype, device_map=device if device == "auto" else None, output_attentions=args.output_attentions, trust_remote_code=True,)
     if device != "auto":
         model = model.to(device)
     model.eval()
@@ -403,8 +348,7 @@ def main() -> int:
         print(f"Registered {attn_count} attention hooks")
 
     # Signal readiness.
-    ready = json.dumps({"type": "ready", "model": args.model,
-                        "hooks": n_hooks}) + "\n"
+    ready = json.dumps({"type": "ready", "model": args.model, "hooks": n_hooks}) + "\n"
     with send_lock:
         sock.sendall(ready.encode("utf-8"))
 
@@ -412,13 +356,7 @@ def main() -> int:
     inputs = tokenizer(args.prompt, return_tensors="pt").to(device)
     print(f"Generating up to {args.max_tokens} tokens ...")
     with torch.no_grad():
-        generated = model.generate(
-            **inputs,
-            max_new_tokens=args.max_tokens,
-            do_sample=False,
-            output_attentions=args.output_attentions,
-            pad_token_id=tokenizer.pad_token_id,
-        )
+        generated = model.generate(**inputs, max_new_tokens=args.max_tokens, do_sample=False, output_attentions=args.output_attentions, pad_token_id=tokenizer.pad_token_id,)
 
     # Signal completion. generate() returns a plain tensor, or a
     # GenerateDecoderOnlyOutput (whose tokens live in .sequences) when
