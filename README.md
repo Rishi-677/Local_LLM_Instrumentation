@@ -12,6 +12,16 @@ cd Local_LLM_Instrumentation
 You need CMake version 3.20 or newer, a C++20 compiler, and Git. The dependencies, which are
 llama.cpp (tag b9587) and FTXUI (version 6.1.9), are downloaded automatically by CMake.
 
+The C++ program depends on:
+- **llama.cpp** (tag b9587) — GGUF model loading and inference
+- **FTXUI** (version 6.1.9) — terminal UI framework (fullscreen, keyboard, rendering)
+- **spdlog** — asynchronous logging
+- **toml++** — TOML config parsing
+- **Catch2** — unit tests
+
+All dependencies are fetched automatically by CMake's `FetchContent`. No manual installation
+is needed beyond CMake 3.20+, a C++20 compiler, and Git.
+
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target local_llm_instrumentation

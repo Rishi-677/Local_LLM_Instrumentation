@@ -14,8 +14,6 @@ It also has a sidecar mode that does the same thing for PyTorch and TensorFlow m
 in Python, by sending the telemetry over a local network socket into the very same dashboard.
 
 Status: working MVP. The main target is llama.cpp and GGUF models, as a single C++ program.
-See [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for the full component
-breakdown, and [`docs/product-requirements.md`](docs/product-requirements.md) for the goals.
 
 ## Why it exists
 
@@ -24,6 +22,25 @@ logging directly into the model code, which is intrusive and slow, or you use he
 tools after the run is finished, which cannot show you what happened live. This project gives
 you a third option: a fast, live, read only view of the forward pass, with almost no setup and
 without touching the model.
+
+## Target users
+
+ML engineers debugging inference pipelines. Researchers studying activations, attention,
+and layer behaviour. Developers integrating models into production services. Students
+learning how modern neural networks execute internally. Platform engineers monitoring
+model health on GPU servers.
+
+## Product principles
+
+1. **Non-invasive by default** — the tool never changes the model or its code.
+2. **Low latency and low overhead** — the capture path stays cheap so it does not
+   distort the numbers it is measuring.
+3. **Keyboard-first and terminal-native** — everything works through Tab and vim keys,
+   no mouse needed.
+4. **Progressive disclosure** — summaries first, details on demand. The dashboard shows
+   you the big picture and lets you drill into whatever looks interesting.
+5. **One data contract everywhere** — the same `TensorEvent` struct travels through the
+   ring buffer, the recording file, and the network socket. Nothing gets translated.
 
 ## What it shows
 
@@ -44,6 +61,45 @@ inside the focused pane.
 5. Latency Flamegraph. Bars that rank the layers by how much compute time they used.
 6. Anomaly Ledger. A running log of problems such as NaN or infinity values, unusually large
    numbers, and operations that fell back to the CPU, each with a timestamp and a severity.
+
+### Layout (the dashboard at a glance)
+
+The six panes are arranged in a two-row grid with a header bar across the top.
+The header shows the project name, active keybindings, the model name, token
+count, event count, drop count, and the current session state (LIVE, REPLAY,
+SIDECAR, DONE). Here is roughly what it looks like:
+
+```
+ [Tab]: Cycle Focus  |  [Q]: Quit App
+╔══ 1. MODEL TOPOLOGY (Focus Active) ═════════╗┌── 2. LIVE PACKET STREAM ──────────────────┐
+║ ▼ llama-3-8b                                 ║│  ID  │ TIMESTAMP    │ LAYER TYPE       │
+║   ► embed_tokens                             ║├──────┼──────────────┼──────────────────┤
+║   ▼ layers                                   ║│  104 │ 21:14:02.110 │ Attn (Self)      │
+║    ▶ layers.0                                ║│  105 │ 21:14:02.114 │ MLP (SwiGLU)     │
+║    ▼ layers.1  [Active Capture Target]       ║│  106 │ 21:14:02.119 │ Attn (Self)      │
+║      ● layers.1.attn ────────────────────────║│  107 │ 21:14:02.122 │ MLP (SwiGLU)     │
+║      ● layers.1.mlp                          ║│  108 │ 21:14:02.128 │ LayerNorm        │
+║    ► layers.2                                ║└──────┴──────────────┴──────────────────┘
+╚════════════════════ [j/k Navigate] ══════════╝
+┌── 3. ATTENTION MATRIX VISUALIZER (HEAD 0) ─────────────────────────────────────────────┐
+│ q0  ██ ░░ ░░ ░░ ░░ ░░    head 0 · layer 1      [h/j/k/l]: Pan matrix                  │
+│ q1  ▒▒ ██ ░░ ░░ ░░ ░░    7 queries × 7 keys    [+/-]:     Weight contrast             │
+│ q2  ░░ ▒▒ ██ ░░ ░░ ░░    view q0+ k0           [f]:        Fit / reset view            │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+┌── 4. RUNTIME METRICS INSPECTOR ──────────────┐┌── 5. LATENCY FLAMEGRAPH ───────────────┐
+│ Tensor Shape : [1, 32, 4096]   Dtype: f16     ││ layers.1      ████████░░░░  1.2 ms 45% │
+│ Sparsity Rate: ████████░░░░░░  54.2%          ││ layers.0      ██████░░░░░░  0.9 ms 33% │
+│ Latency Delta: 1.142 ms                       ││ embed         ██░░░░░░░░░░  0.3 ms 11% │
+└──────────────────────────────────────────────┘└── 6. ANOMALY LEDGER ───────────────────┘
+                                                 │ 21:14:02.114 ⚠ Outlier: max > 6.0     │
+                                                 │ 21:14:02.128 ✖ NaN in attn_norm-0     │
+                                                 └────────────────────────────────────────┘
+```
+
+This layout is terminal-native and keyboard-driven throughout. Inspiration was taken
+from [lazygit](https://github.com/jesseduffield/lazygit) and
+[btop](https://github.com/aristocratos/btop) — tools that prove a full-featured
+interactive UI does not need a browser.
 
 ## How it works
 
@@ -72,6 +128,19 @@ for the selected layer, so the hot path stays cheap. That same `TensorEvent` rec
 contract used everywhere: it travels through the queue, it is written to disk for recording,
 and it is sent across the network for the sidecar. Because it is the same structure in all
 three places, the dashboard code is reused without changes.
+
+Stepping back, the whole pipeline looks like this:
+
+```
+┌─────────────────────── one C++ process ───────────────────────┐
+│  [inference thread]                  [TUI render thread]       │
+│  llama.cpp eval loop                 FTXUI app (~30–60 fps)    │
+│    └─ cb_eval(tensor, ask, ud) ──►   drains ring buffer        │
+│         compute lightweight stats    updates pane state        │
+│         push TensorEvent ───────►  [lock-free SPSC ring buf]   │
+│                                      keyboard: vim + Tab focus │
+└───────────────────────────────────────────────────────────────┘
+```
 
 ## Features in detail
 
@@ -228,18 +297,6 @@ data like attention matrices.
 
 The struct is trivially copyable by design — this is what makes the SPSC ring, the binary
 `.llmtrace` format, and the network serialization all work with zero translation.
-
-### Build dependencies
-
-The C++ program depends on:
-- **llama.cpp** (tag b9587) — GGUF model loading and inference
-- **FTXUI** (version 6.1.9) — terminal UI framework (fullscreen, keyboard, rendering)
-- **spdlog** — asynchronous logging
-- **toml++** — TOML config parsing
-- **Catch2** — unit tests
-
-All dependencies are fetched automatically by CMake's `FetchContent`. No manual installation
-is needed beyond CMake 3.20+, a C++20 compiler, and Git.
 
 ## File map
 
@@ -457,18 +514,9 @@ tests/test_sidecar_e2e.py         End-to-end test that starts the C++ receiver
                                   verifies events arrived.
 ```
 
-### `docs/` and `scripts/`
+### `scripts/`
 
 ```
-docs/product-requirements.md      Product requirements document — what the
-                                  tool should do, user stories, priorities.
-
-docs/implementation-roadmap.md    Implementation roadmap — component-by-
-                                  component breakdown, status, future work.
-
-docs/project-brief-and-tui-       Early project brief with the terminal UI
-  mockup.md                       mockup and design rationale.
-
 scripts/dist.ps1                  PowerShell script that builds a distributable
                                   zip archive of the binary and Python sidecar.
 ```
