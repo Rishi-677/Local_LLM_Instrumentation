@@ -1,11 +1,9 @@
 // Local_LLM_Instrumentation - panic/terminal restore guard.
-//
 // FTXUI owns the terminal while the fullscreen dashboard is active. If the
 // process dies via a signal or uncaught exception, restore basic terminal state
 // before handing control back to the default crash path.
 
 #pragma once
-
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -21,9 +19,10 @@ inline std::atomic<bool> installed{false};
 
 inline void restore_terminal_unchecked() noexcept {
     // Reset attributes, show cursor, disable common mouse modes, leave alt screen.
-    std::fputs("\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l"
-               "\x1b[?1006l\x1b[?1049l",
-               stderr);
+    std::fputs(
+        "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l"
+        "\x1b[?1006l\x1b[?1049l",
+        stderr);
     std::fflush(stderr);
 }
 
@@ -44,7 +43,7 @@ inline void signal_handler(int sig) {
     std::abort();
 }
 
-} // namespace detail
+}  // namespace detail
 
 inline void restore_terminal() noexcept {
     if (detail::terminal_claimed.load(std::memory_order_relaxed)) {
@@ -54,8 +53,8 @@ inline void restore_terminal() noexcept {
 
 inline void install() {
     bool expected = false;
-    if (!detail::installed.compare_exchange_strong(expected, true)) return;
-
+    if (!detail::installed.compare_exchange_strong(expected, true))
+        return;
     std::set_terminate(detail::terminate_handler);
     std::signal(SIGABRT, detail::signal_handler);
     std::signal(SIGFPE, detail::signal_handler);
@@ -73,14 +72,12 @@ public:
     TerminalClaim() {
         detail::terminal_claimed.store(true, std::memory_order_release);
     }
-
     ~TerminalClaim() {
         restore_terminal();
         detail::terminal_claimed.store(false, std::memory_order_release);
     }
-
     TerminalClaim(const TerminalClaim&) = delete;
     TerminalClaim& operator=(const TerminalClaim&) = delete;
 };
 
-} // namespace ts::panic
+}  // namespace ts::panic

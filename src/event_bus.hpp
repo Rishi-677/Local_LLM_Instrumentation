@@ -1,11 +1,10 @@
 // Local_LLM_Instrumentation — typed publish/subscribe event bus (C-bus).
-//
 // A small, header-only, thread-safe fan-out for in-process signalling between
 // the TUI panes, the capture/control layer, and the anomaly engine. Unlike the
 // SPSC ring buffer (the hot inference path), this bus is for low-frequency
 // control-plane events ("target selected", "pane focused", "session paused")
 // where ergonomics and ordering matter more than nanoseconds.
-//
+
 // Two delivery modes share the same priority-ordered fan-out:
 //   publish(e)       — synchronous: invoke every current handler right now.
 //   enqueue(e, p)    — deferred: stage onto an internal queue; the owner later
@@ -27,7 +26,6 @@
 // future control-plane signalling; it is intentionally unreferenced by main.
 
 #pragma once
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -40,22 +38,21 @@ namespace ts {
 // Relative handler importance. Higher value = invoked earlier. The integral
 // values are load-bearing: we sort by them (descending) for the fan-out.
 enum class Priority : int {
-    Low    = 0,
+    Low = 0,
     Normal = 1,
-    High   = 2,
+    High = 2,
 };
 
 template <typename Event>
 class EventBus {
 public:
     using Handler = std::function<void(const Event&)>;
-    using Token   = std::uint64_t;
-
+    using Token = std::uint64_t;
     EventBus() = default;
 
     // Non-copyable / non-movable: a bus has identity (subscribers hold tokens
     // against *this* instance) and owns a mutex.
-    EventBus(const EventBus&)            = delete;
+    EventBus(const EventBus&) = delete;
     EventBus& operator=(const EventBus&) = delete;
 
     // Register a handler. Returns an opaque, never-reused token for unsubscribe.
@@ -72,9 +69,10 @@ public:
     // Remove a handler by token. Returns true if a matching handler existed.
     bool unsubscribe(Token t) {
         std::lock_guard<std::mutex> lk(mu_);
-        const auto it = std::find_if(subs_.begin(), subs_.end(),
-                                     [t](const Sub& s) { return s.token == t; });
-        if (it == subs_.end()) return false;
+        const auto it =
+            std::find_if(subs_.begin(), subs_.end(), [t](const Sub& s) { return s.token == t; });
+        if (it == subs_.end())
+            return false;
         subs_.erase(it);
         return true;
     }
@@ -111,8 +109,9 @@ public:
         std::vector<Handler> ordered;
         {
             std::lock_guard<std::mutex> lk(mu_);
-            if (pending_.empty()) return 0;
-            batch.swap(pending_);          // take the whole queue; leave it empty
+            if (pending_.empty())
+                return 0;
+            batch.swap(pending_);  // take the whole queue; leave it empty
             ordered = ordered_handlers_locked();
         }
 
@@ -154,24 +153,25 @@ private:
     // One registered subscriber. `seq` preserves subscription order as a stable
     // tiebreaker behind `prio`.
     struct Sub {
-        Token       token;
-        Priority    prio;
+        Token token;
+        Priority prio;
         std::uint64_t seq;
-        Handler     handler;
+        Handler handler;
     };
 
     // One staged event awaiting deferred delivery.
     struct Pending {
-        Priority      prio;
+        Priority prio;
         std::uint64_t seq;
-        Event         event;
+        Event event;
     };
 
     // Build the priority-ordered handler list. Caller must hold mu_.
     std::vector<Handler> ordered_handlers_locked() const {
         std::vector<const Sub*> view;
         view.reserve(subs_.size());
-        for (const Sub& s : subs_) view.push_back(&s);
+        for (const Sub& s : subs_)
+            view.push_back(&s);
 
         // High → Low by priority; subscription order within a priority. A stable
         // sort isn't required since `seq` already breaks every tie uniquely.
@@ -183,7 +183,8 @@ private:
 
         std::vector<Handler> out;
         out.reserve(view.size());
-        for (const Sub* s : view) out.push_back(s->handler);
+        for (const Sub* s : view)
+            out.push_back(s->handler);
         return out;
     }
 
@@ -193,12 +194,12 @@ private:
         return ordered_handlers_locked();
     }
 
-    mutable std::mutex   mu_;
-    std::vector<Sub>     subs_;
+    mutable std::mutex mu_;
+    std::vector<Sub> subs_;
     std::vector<Pending> pending_;
-    Token                next_token_ = 1;  // 0 reserved as an "invalid" sentinel
-    std::uint64_t        seq_  = 0;        // subscription-order counter
-    std::uint64_t        eseq_ = 0;        // enqueue-order counter
+    Token next_token_ = 1;    // 0 reserved as an "invalid" sentinel
+    std::uint64_t seq_ = 0;   // subscription-order counter
+    std::uint64_t eseq_ = 0;  // enqueue-order counter
 };
 
-} // namespace ts
+}  // namespace ts

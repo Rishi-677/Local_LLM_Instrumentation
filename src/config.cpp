@@ -1,9 +1,6 @@
 // Local_LLM_Instrumentation — TOML config loader implementation.
-
 #include "config.hpp"
-
 #include <sstream>
-
 #include <toml++/toml.hpp>
 
 namespace ts {
@@ -40,11 +37,10 @@ void assign_float(const toml::table& tbl, std::string_view key, float& dst) {
     }
 }
 
-} // namespace
+}  // namespace
 
 Config Config::load(const std::string& path, std::string* error) {
     Config cfg = defaults();
-
     toml::table root;
     try {
         root = toml::parse_file(path);
@@ -70,38 +66,38 @@ Config Config::load(const std::string& path, std::string* error) {
 
     if (auto* session = root["session"].as_table()) {
         assign<int>(*session, "max_tokens", cfg.max_tokens);
-        assign<int>(*session, "delay_ms",   cfg.delay_ms);
+        assign<int>(*session, "delay_ms", cfg.delay_ms);
     }
 
     if (auto* capture = root["capture"].as_table()) {
-        assign<bool>(*capture, "embed",         cfg.capture_embed);
-        assign<bool>(*capture, "attn",          cfg.capture_attn);
-        assign<bool>(*capture, "mlp",           cfg.capture_mlp);
-        assign<bool>(*capture, "norm",          cfg.capture_norm);
-        assign<bool>(*capture, "other",         cfg.capture_other);
+        assign<bool>(*capture, "embed", cfg.capture_embed);
+        assign<bool>(*capture, "attn", cfg.capture_attn);
+        assign<bool>(*capture, "mlp", cfg.capture_mlp);
+        assign<bool>(*capture, "norm", cfg.capture_norm);
+        assign<bool>(*capture, "other", cfg.capture_other);
         assign<bool>(*capture, "no_flash_attn", cfg.no_flash_attn);
-        assign<int>(*capture,  "stats_sample",  cfg.stats_sample);
+        assign<int>(*capture, "stats_sample", cfg.stats_sample);
     }
 
     if (auto* anomaly = root["anomaly"].as_table()) {
-        assign_float(*anomaly, "threshold",         cfg.anomaly_threshold);
+        assign_float(*anomaly, "threshold", cfg.anomaly_threshold);
         assign<bool>(*anomaly, "flag_cpu_fallback", cfg.flag_cpu_fallback);
     }
 
     if (auto* attention = root["attention"].as_table()) {
         assign<int>(*attention, "layer", cfg.attention_layer);
-        assign<int>(*attention, "head",  cfg.attention_head);
+        assign<int>(*attention, "head", cfg.attention_head);
     }
 
     if (auto* sidecar = root["sidecar"].as_table()) {
         assign<bool>(*sidecar, "enabled", cfg.sidecar_enabled);
-        assign<int>(*sidecar, "port",    cfg.sidecar_port);
+        assign<int>(*sidecar, "port", cfg.sidecar_port);
         assign<std::string>(*sidecar, "host", cfg.sidecar_host);
     }
 
     if (auto* theme = root["theme"].as_table()) {
         assign<std::string>(*theme, "name", cfg.theme);
-        assign<bool>(*theme, "nerd_fonts",  cfg.nerd_fonts);
+        assign<bool>(*theme, "nerd_fonts", cfg.nerd_fonts);
     }
 
     if (error) {
@@ -117,10 +113,8 @@ std::string Config::to_string() const {
        << "  session.max_tokens   = " << max_tokens << "\n"
        << "  session.delay_ms     = " << delay_ms << "\n"
        << "  capture: embed=" << (capture_embed ? "on" : "off")
-       << " attn="  << (capture_attn  ? "on" : "off")
-       << " mlp="   << (capture_mlp   ? "on" : "off")
-       << " norm="  << (capture_norm  ? "on" : "off")
-       << " other=" << (capture_other ? "on" : "off")
+       << " attn=" << (capture_attn ? "on" : "off") << " mlp=" << (capture_mlp ? "on" : "off")
+       << " norm=" << (capture_norm ? "on" : "off") << " other=" << (capture_other ? "on" : "off")
        << " no_flash_attn=" << (no_flash_attn ? "on" : "off") << "\n"
        << "  capture.stats_sample = " << stats_sample << "\n"
        << "  anomaly.threshold    = " << anomaly_threshold
@@ -128,10 +122,10 @@ std::string Config::to_string() const {
        << "  attention.layer/head = " << attention_layer << "/" << attention_head << "\n"
        << "  sidecar              = " << (sidecar_enabled ? "on" : "off")
        << " host=" << sidecar_host << " port=" << sidecar_port << "\n"
-       << "  theme.name           = " << theme
-       << " nerd_fonts=" << (nerd_fonts ? "on" : "off") << "\n"
+       << "  theme.name           = " << theme << " nerd_fonts=" << (nerd_fonts ? "on" : "off")
+       << "\n"
        << "}";
     return os.str();
 }
 
-} // namespace ts
+}  // namespace ts
