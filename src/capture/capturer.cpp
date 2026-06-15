@@ -1,39 +1,39 @@
 #include "capturer.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
-
-#include "ggml.h"
-#include "ggml-backend.h"
-
-#include "topology.hpp"
 #include "../stats.hpp"
+#include "ggml-backend.h"
+#include "ggml.h"
+#include "topology.hpp"
 
 namespace ts {
 
 namespace {
 
-constexpr int64_t kAttnMaxDim = 256; // cap attention matrix rows/cols
+constexpr int64_t kAttnMaxDim = 256;  // cap attention matrix rows/cols
 
 // kq_soft_max has shape [n_kv, n_tokens, n_head]: keys fastest, then query
 // tokens, then heads. Extract the [query x key] slice for one head into a
 // row-major AttentionPayload. Called only for the selected layer, so the
 // allocation here is off the per-op hot path for every other node.
-bool build_attention(const ggml_tensor * t, int layer, int head_want, AttentionPayload & out) {
-    const int64_t n_kv   = t->ne[0];
-    const int64_t n_tok  = t->ne[1];
+bool build_attention(const ggml_tensor* t, int layer, int head_want, AttentionPayload& out) {
+    const int64_t n_kv = t->ne[0];
+    const int64_t n_tok = t->ne[1];
     const int64_t n_head = t->ne[2] > 0 ? t->ne[2] : 1;
 
     int head = head_want;
-    if (head < 0) head = 0;
-    if (head >= n_head) head = static_cast<int>(n_head - 1);
+    if (head < 0)
+        head = 0;
+    if (head >= n_head)
+        head = static_cast<int>(n_head - 1);
 
     const int64_t rows = std::min<int64_t>(n_tok, kAttnMaxDim);
-    if (rows <= 0 || n_kv <= 0) return false;
+    if (rows <= 0 || n_kv <= 0)
+        return false;
 
-    const float * data = static_cast<const float *>(t->data);
+    const float* data = static_cast<const float*>(t->data);
     const int64_t head_off = static_cast<int64_t>(head) * n_kv * n_tok;
 
     // The kq tensor's key dimension is padded to the KV-cache width, so most
@@ -43,16 +43,22 @@ bool build_attention(const ggml_tensor * t, int layer, int head_want, AttentionP
     for (int64_t c = std::min<int64_t>(n_kv, kAttnMaxDim) - 1; c >= 0; --c) {
         bool used = false;
         for (int64_t r = 0; r < rows; ++r) {
-            if (std::fabs(data[head_off + r * n_kv + c]) > 1e-4f) { used = true; break; }
+            if (std::fabs(data[head_off + r * n_kv + c]) > 1e-4f) {
+                used = true;
+                break;
+            }
         }
-        if (used) { active = c + 1; break; }
+        if (used) {
+            active = c + 1;
+            break;
+        }
     }
     const int64_t cols = active > 0 ? active : std::min<int64_t>(n_kv, kAttnMaxDim);
 
     out.layer_idx = layer;
-    out.head      = head;
-    out.rows      = static_cast<int>(rows);
-    out.cols      = static_cast<int>(cols);
+    out.head = head;
+    out.rows = static_cast<int>(rows);
+    out.cols = static_cast<int>(cols);
     out.weights.assign(static_cast<size_t>(rows) * static_cast<size_t>(cols), 0.0f);
 
     for (int64_t r = 0; r < rows; ++r) {
@@ -64,19 +70,23 @@ bool build_attention(const ggml_tensor * t, int layer, int head_want, AttentionP
 }
 
 uint64_t now_ns() {
-    return static_cast<uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
+    return static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
 // Best-effort device from the tensor's backend buffer name ("CPU", "CUDA0",
-// "Metal", ...). CPU when unknown — this milestone is CPU-only anyway.
-Device device_of(const ggml_tensor * t) {
-    if (!t->buffer) return Device::CPU;
-    const char * bn = ggml_backend_buffer_name(t->buffer);
-    if (!bn) return Device::CPU;
-    if (std::strstr(bn, "CUDA")) return Device::CUDA;
-    if (std::strstr(bn, "Metal")) return Device::Metal;
-    if (std::strstr(bn, "CPU")) return Device::CPU;
+// "Metal"). CPU when unknown — this milestone is CPU-only anyway.
+Device device_of(const ggml_tensor* t) {
+    if (!t->buffer)
+        return Device::CPU;
+    const char* bn = ggml_backend_buffer_name(t->buffer);
+    if (!bn)
+        return Device::CPU;
+    if (std::strstr(bn, "CUDA"))
+        return Device::CUDA;
+    if (std::strstr(bn, "Metal"))
+        return Device::Metal;
+    if (std::strstr(bn, "CPU"))
+        return Device::CPU;
     return Device::Other;
 }
 
@@ -84,16 +94,17 @@ Device device_of(const ggml_tensor * t) {
 // Delegates to the pure, unit-tested compute_stats(); LayerEvent inherits
 // ActivationStats, so we assign the base slice directly. `max_scan` bounds the
 // per-op cost on the model thread (the dominant capture overhead).
-void fill_stats(const ggml_tensor * t, TensorEvent & e, int64_t max_scan) {
-    static_cast<ActivationStats &>(e) = compute_stats(
-        static_cast<const float *>(t->data), ggml_nelements(t), max_scan);
+void fill_stats(const ggml_tensor* t, TensorEvent& e, int64_t max_scan) {
+    static_cast<ActivationStats&>(e) =
+        compute_stats(static_cast<const float*>(t->data), ggml_nelements(t), max_scan);
 }
 
-} // namespace
+}  // namespace
 
-bool Capturer::on_eval(ggml_tensor * t, bool ask, void * user_data) {
-    auto * self = static_cast<Capturer *>(user_data);
-    if (!self || !t) return true;
+bool Capturer::on_eval(ggml_tensor* t, bool ask, void* user_data) {
+    auto* self = static_cast<Capturer*>(user_data);
+    if (!self || !t)
+        return true;
 
     if (ask) {
         // Early-out: skip the callback for masked classes entirely.
@@ -103,51 +114,50 @@ bool Capturer::on_eval(ggml_tensor * t, bool ask, void * user_data) {
         if (t->name && t->name[0]) {
             auto [cls, _] = classify(t->name);
             const int ci = static_cast<int>(cls);
-            if (ci >= 0 && ci < 6 && !self->mask_[ci]) return false;
+            if (ci >= 0 && ci < 6 && !self->mask_[ci])
+                return false;
         }
         return true;
     }
     return self->capture(t);
 }
 
-bool Capturer::capture(ggml_tensor * t) {
+bool Capturer::capture(ggml_tensor* t) {
     TensorEvent e;
-    e.id           = counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    e.id = counter_.fetch_add(1, std::memory_order_relaxed) + 1;
     e.timestamp_ns = now_ns();
 
     // Latency delta vs. the previous captured op.
     const uint64_t prev = prev_ns_.exchange(e.timestamp_ns, std::memory_order_relaxed);
-    e.latency_us = (prev && e.timestamp_ns > prev)
-                       ? (e.timestamp_ns - prev) / 1000u
-                       : 0u;
+    e.latency_us = (prev && e.timestamp_ns > prev) ? (e.timestamp_ns - prev) / 1000u : 0u;
 
     // Names (bounded copies into the fixed buffers).
     std::strncpy(e.node_name, t->name ? t->name : "", kNameLen - 1);
-    const char * opn = ggml_op_name(t->op);
+    const char* opn = ggml_op_name(t->op);
     std::strncpy(e.op_name, opn ? opn : "", kNameLen - 1);
 
     // Shape / dtype.
-    for (int i = 0; i < kMaxDims; ++i) e.shape[i] = t->ne[i];
-    e.dtype      = static_cast<int32_t>(t->type);
+    for (int i = 0; i < kMaxDims; ++i)
+        e.shape[i] = t->ne[i];
+    e.dtype = static_cast<int32_t>(t->type);
     e.dtype_size = static_cast<int32_t>(ggml_type_size(t->type));
 
     // Classification (class + layer index from the name).
     auto [cls, layer] = classify(t->name);
-    e.op_class  = cls;
+    e.op_class = cls;
     e.layer_idx = layer;
 
     // Capture mask: drop masked-off classes before any further work.
     const int ci = static_cast<int>(cls);
-    if (ci >= 0 && ci < 6 && !mask_[ci]) return true;
-
+    if (ci >= 0 && ci < 6 && !mask_[ci])
+        return true;
     e.device = device_of(t);
 
     // Cheap stats only when we can safely read contiguous F32 host data.
     // Guard against device (e.g. CUDA) pointers, which are non-null but not
     // host-dereferenceable.
     const bool host_readable =
-        t->data != nullptr &&
-        (t->buffer == nullptr || ggml_backend_buffer_is_host(t->buffer));
+        t->data != nullptr && (t->buffer == nullptr || ggml_backend_buffer_is_host(t->buffer));
     if (t->type == GGML_TYPE_F32 && host_readable && ggml_is_contiguous(t)) {
         fill_stats(t, e, stats_sample_);
     }
@@ -157,19 +167,20 @@ bool Capturer::capture(ggml_tensor * t) {
         t->type == GGML_TYPE_F32 && host_readable && ggml_is_contiguous(t) &&
         std::strncmp(e.node_name, "kq_soft_max", 11) == 0) {
         AttentionPayload p;
-        if (build_attention(t, e.layer_idx, attn_->target_head.load(std::memory_order_acquire), p)) {
+        if (build_attention(t, e.layer_idx, attn_->target_head.load(std::memory_order_acquire),
+                            p)) {
             // Keep the richest matrix: a new layer always wins; otherwise only
             // overwrite if this pass has at least as many query rows (so the
             // square prefill matrix isn't clobbered by 1-row generation steps).
             if (e.layer_idx != last_attn_layer_ || p.rows >= last_attn_rows_) {
                 attn_->publish(p);
                 last_attn_layer_ = e.layer_idx;
-                last_attn_rows_  = p.rows;
+                last_attn_rows_ = p.rows;
             }
         }
     }
 
-    ring_.push(e); // SPSC; drops + counts on overflow, never blocks
+    ring_.push(e);  // SPSC; drops + counts on overflow, never blocks
     return true;
 }
 
@@ -177,4 +188,4 @@ void Capturer::prime() {
     prev_ns_.store(0, std::memory_order_relaxed);
 }
 
-} // namespace ts
+}  // namespace ts
