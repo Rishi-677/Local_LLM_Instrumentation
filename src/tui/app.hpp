@@ -1,5 +1,4 @@
 // Local_LLM_Instrumentation — FTXUI TUI shell (C-TUI).
-//
 // `App` owns the 6-pane live dashboard. It reads a `UiState` snapshot once per
 // frame and renders; it never blocks the producer. Input is keyboard-driven:
 //   - Tab            cycle focus between the 5 panes
@@ -8,16 +7,13 @@
 //   - h/j/k/l + -    pan / contrast the attention heatmap (when focused)
 //   - f / F          fit-reset / toggle-fullscreen the attention heatmap
 //   - q / Q          quit
-//
 // Cross-thread refresh: the lead's consumer thread calls `request_redraw()`
 // after mutating the shared UiState; that posts an Event::Custom to the FTXUI
 // screen so the loop redraws from the latest snapshot.
 
 #pragma once
-
 #include <functional>
 #include <string>
-
 #include "../session/replay.hpp"
 #include "ui_state.hpp"
 
@@ -44,7 +40,9 @@ public:
     std::string preview(int width, int height);
 
     // Apply a live-stream filter (also used by --preview-filter for docs/tests).
-    void set_stream_filter(const std::string& f) { stream_filter_ = f; }
+    void set_stream_filter(const std::string& f) {
+        stream_filter_ = f;
+    }
 
     // Invoked with the layer index when the user presses space on a topology
     // row. Set this before run(). May be called from the render thread.
@@ -52,25 +50,24 @@ public:
 
     // Attach a replay scrub controller (optional). When set, the app shows
     // scrub keybindings and handles p/s for pause/step.
-    void set_replay_control(ReplayControl* ctrl) { replay_ctrl_ = ctrl; }
+    void set_replay_control(ReplayControl* ctrl) {
+        replay_ctrl_ = ctrl;
+    }
 
 private:
-    UiState&                  state_;
+    UiState& state_;
     ftxui::ScreenInteractive* screen_ = nullptr;  // valid only during run()
-    ReplayControl*            replay_ctrl_ = nullptr;
-
+    ReplayControl* replay_ctrl_ = nullptr;
     // Focus: which of the 5 panes currently receives directional input.
-    int  focus_ = 0;   // 0..4
-
+    int focus_ = 0;  // 0..4
     // Attention pane local view state (not shared — purely presentation).
-    int   att_pan_row_    = 0;
-    int   att_pan_col_    = 0;
-    float att_contrast_   = 1.0f;
-    bool  att_fullscreen_ = false;  // F: attention fills the screen
-
+    int att_pan_row_ = 0;
+    int att_pan_col_ = 0;
+    float att_contrast_ = 1.0f;
+    bool att_fullscreen_ = false;  // F: attention fills the screen
     // Live packet-stream filter ('/' to edit; matches layer type / op / device).
     std::string stream_filter_;
-    bool        filter_editing_ = false;
+    bool filter_editing_ = false;
 };
 
-} // namespace ts
+}  // namespace ts
