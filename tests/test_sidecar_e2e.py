@@ -13,18 +13,15 @@ import sys
 import time
 
 # Windows builds produce a .exe; POSIX builds have no extension.
-_BINARY_BASE = os.path.join(os.path.dirname(__file__), "..", "build",
-                            "local_llm_instrumentation")
+_BINARY_BASE = os.path.join(os.path.dirname(__file__), "..", "build", "local_llm_instrumentation")
 BINARY = _BINARY_BASE + ".exe" if os.path.exists(_BINARY_BASE + ".exe") \
-    else _BINARY_BASE
-SIDECAR = os.path.join(os.path.dirname(__file__), "..", "py_sidecar",
-                       "sidecar.py")
+else _BINARY_BASE
+SIDECAR = os.path.join(os.path.dirname(__file__), "..", "py_sidecar", "sidecar.py")
 MODEL = "hf-internal-testing/tiny-random-gpt2"
 PORT = 19876  # non-default to avoid port conflicts
 
-
 def main() -> int:
-    # ---- start C++ receiver -------------------------------------------------
+    # start C++ receiver 
     print(f"[test] starting C++ receiver on port {PORT} ...")
     cpp = subprocess.Popen(
         [BINARY, "--sidecar", f"--sidecar-port", str(PORT),
@@ -34,14 +31,13 @@ def main() -> int:
         text=True,
     )
     time.sleep(1.5)  # give the receiver time to bind/listen
-
     if cpp.poll() is not None:
         print(f"[FAIL] C++ binary exited prematurely (rc={cpp.returncode})")
         _, err = cpp.communicate()
         print("stderr:", err)
         return 1
 
-    # ---- run Python sidecar -------------------------------------------------
+    # run Python sidecar
     print(f"[test] starting Python sidecar (model={MODEL}) ...")
     py = subprocess.Popen(
         [sys.executable, SIDECAR,
@@ -84,7 +80,7 @@ def main() -> int:
         print("--- C++ stderr ---")
         print(cpp_err)
 
-    # ---- verify results -----------------------------------------------------
+    # verify results 
     py_rc = py.returncode
     cpp_rc = cpp.returncode
     print(f"\n[test] Python rc={py_rc}  C++ rc={cpp_rc}")
@@ -109,7 +105,6 @@ def main() -> int:
 
     print("[PASS] End-to-end sidecar test OK")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

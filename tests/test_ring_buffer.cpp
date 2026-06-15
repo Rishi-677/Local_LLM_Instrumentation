@@ -1,12 +1,8 @@
 // Tests for the lock-free SPSC ring buffer.
-
-#include <catch2/catch_test_macros.hpp>
-
 #include <atomic>
+#include <catch2/catch_test_macros.hpp>
 #include <thread>
-
 #include "ring_buffer.hpp"
-
 using ts::SpscRing;
 
 TEST_CASE("capacity is rounded up to a power of two", "[ring]") {
@@ -18,7 +14,8 @@ TEST_CASE("capacity is rounded up to a power of two", "[ring]") {
 
 TEST_CASE("push then pop preserves FIFO order", "[ring]") {
     SpscRing<int> r(8);
-    for (int i = 0; i < 5; ++i) REQUIRE(r.push(i));
+    for (int i = 0; i < 5; ++i)
+        REQUIRE(r.push(i));
     int out = -1;
     for (int i = 0; i < 5; ++i) {
         REQUIRE(r.pop(out));
@@ -31,7 +28,8 @@ TEST_CASE("overflow drops and counts, never corrupts", "[ring]") {
     SpscRing<int> r(4);  // capacity 4
     int pushed = 0;
     for (int i = 0; i < 100; ++i)
-        if (r.push(i)) ++pushed;
+        if (r.push(i))
+            ++pushed;
     REQUIRE(pushed == 4);
     REQUIRE(r.dropped() == 96);
 
@@ -45,9 +43,13 @@ TEST_CASE("overflow drops and counts, never corrupts", "[ring]") {
 
 TEST_CASE("drain delivers all available items", "[ring]") {
     SpscRing<int> r(16);
-    for (int i = 0; i < 10; ++i) r.push(i);
+    for (int i = 0; i < 10; ++i)
+        r.push(i);
     int sum = 0, count = 0;
-    size_t n = r.drain([&](int v) { sum += v; ++count; });
+    size_t n = r.drain([&](int v) {
+        sum += v;
+        ++count;
+    });
     REQUIRE(n == 10);
     REQUIRE(count == 10);
     REQUIRE(sum == 45);
@@ -60,7 +62,8 @@ TEST_CASE("single-producer / single-consumer integrity under threads", "[ring]")
 
     std::thread producer([&] {
         for (uint64_t i = 0; i < N; ++i) {
-            while (!r.push(i)) { /* spin until the consumer drains */ }
+            while (!r.push(i)) { /* spin until the consumer drains */
+            }
         }
     });
 
